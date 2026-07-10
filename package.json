@@ -1,0 +1,13 @@
+{
+  "name": "receipts-buffer-only-mvp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A Buffer-only client approval layer: sync posts, share a review room, stamp approval, and keep the receipt.",
+  "scripts": {
+    "check": "node scripts/check.js",
+    "serve": "npx --yes serve . -l 8888"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
