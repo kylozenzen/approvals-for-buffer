@@ -5,6 +5,8 @@
   var session=null;
   var mode='demo';
   var DEMO_KEY='receipts_buffer_beta_demo_v1';
+  var ENABLE_BYO_BUFFER_KEY=true;
+  var bufferToken='';
 
   function clone(v){return JSON.parse(JSON.stringify(v));}
   function loadDemo(){try{var raw=localStorage.getItem(DEMO_KEY);if(raw)return JSON.parse(raw);}catch(e){}var fresh=clone(window.RECEIPTS_DEMO);saveDemo(fresh);return fresh;}
@@ -40,6 +42,7 @@
     if(mode==='remote')return creator('rotateClientSecret',{clientId:clientId,kind:kind});
     var data=loadDemo(),c=clientFor(data,clientId);if(!c)throw new Error('Client not found');if(kind==='room')c.roomToken=demoToken(c.company);else c.approvalCode=demoCode();saveDemo(data);return {client:clone(c),data:clone(data)};
   }
+  async function updateRoomControls(clientId,payload){if(mode==='remote')return creator('updateRoomControls',Object.assign({clientId:clientId},payload||{}));var data=loadDemo(),c=clientFor(data,clientId);if(!c)throw new Error('Client not found');if(payload.clearLock)c.approvalLockedUntil=null;if(payload.expiresAt)c.roomTokenExpiresAt=payload.expiresAt;saveDemo(data);return {client:clone(c),data:clone(data)};}
   async function assignPost(postId,clientId){
     if(mode==='remote')return creator('assignPost',{postId:postId,clientId:clientId});
     var data=loadDemo(),p=postFor(data,postId);if(!p)throw new Error('Post not found');p.clientId=clientId||null;saveDemo(data);return {post:clone(p),data:clone(data)};
@@ -52,10 +55,12 @@
     if(mode==='remote')return creator('addCreatorComment',{postId:postId,body:body});
     var data=loadDemo(),p=postFor(data,postId);if(!p)throw new Error('Post not found');p.comments=p.comments||[];p.comments.push({authorType:'creator',authorName:'You',body:body,kind:'comment',createdAt:new Date().toISOString()});saveDemo(data);return {data:clone(data)};
   }
+  async function selectBufferOrganization(organizationId){if(mode==='remote')return creator('selectBufferOrganization',{organizationId:organizationId});return {ok:true};}
   async function syncBuffer(token){
-    if(mode==='remote')return creator('syncBuffer',{},token?{'x-buffer-token':token}:{});
+    if(mode==='remote')return creator('syncBuffer',{},ENABLE_BYO_BUFFER_KEY&&token?{'x-buffer-token':token}:{});
     var data=loadDemo();data.lastSync=new Date().toISOString();var unassigned=data.posts.find(function(p){return p.bufferId==='buf_demo_new';});if(!unassigned){data.posts.unshift({id:U.id('post'),bufferId:'buf_demo_new',clientId:null,title:'Fresh Buffer draft',caption:'A newly synced Buffer draft appears here, ready to assign to a client.',image:'',platform:'LinkedIn',service:'linkedin',status:'draft',bufferStatus:'draft',version:1,changedSinceReview:false,createdAt:new Date().toISOString(),comments:[]});}saveDemo(data);await new Promise(function(r){setTimeout(r,450);});return {data:clone(data),added:unassigned?0:1,updated:data.posts.length};
   }
+  async function resendApprovalEmail(receiptId){if(mode==='remote')return creator('resendApprovalEmail',{receiptId:receiptId});return {sent:false};}
   async function inviteClient(clientId){
     if(mode==='remote')return creator('inviteClient',{clientId:clientId});
     var data=loadDemo(),c=clientFor(data,clientId);if(!c)throw new Error('Client not found');return {sent:false,preview:'Review room: '+U.roomUrl(c.roomToken)+'\nOwner code: '+c.approvalCode};
@@ -77,14 +82,15 @@
     var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;}),p=postFor(data,postId);if(!c||!p||p.clientId!==c.id)throw new Error('Post not found');p.status='changes';p.feedback=body;p.comments=p.comments||[];p.comments.push({authorType:'client',authorName:name||'Client',body:body,kind:'change',createdAt:new Date().toISOString()});saveDemo(data);return {ok:true};
   }
   async function approvePost(token,postId,name,code){
-    if(mode==='remote')return review('approve',token,{postId:postId,name:name,code:code});
-    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;}),p=postFor(data,postId);if(!c||!p||p.clientId!==c.id)throw new Error('Post not found');if(code!==c.approvalCode)throw new Error('Owner code does not match.');if(p.changedSinceReview)throw new Error('This post changed in Buffer after review began. Ask the creator to resend it.');var receiptCode=demoReceiptCode(),fingerprint=p.fingerprint||demoFingerprint(p),now=new Date().toISOString();p.status='approved';p.approvedBy=name||c.approvalOwner;p.approvedAt=now;p.receiptCode=receiptCode;p.fingerprint=fingerprint;p.comments=p.comments||[];p.comments.push({authorType:'client',authorName:p.approvedBy,body:'Final approval stamped with the owner code.',kind:'approval',createdAt:now});data.receipts.unshift({id:U.id('receipt'),receiptCode:receiptCode,postId:p.id,clientId:c.id,clientCompany:c.company,title:p.title,platform:p.platform,approverName:p.approvedBy,approvedAt:now,version:p.version,fingerprint:fingerprint,snapshot:{caption:p.caption,image:p.image,platform:p.platform}});saveDemo(data);return {receiptCode:receiptCode,approvedAt:now};
+    if(mode==='remote')return review('approve',token,{postId:postId,code:code});
+    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;}),p=postFor(data,postId);if(!c||!p||p.clientId!==c.id)throw new Error('Post not found');if(code!==c.approvalCode)throw new Error('Owner code does not match.');if(p.changedSinceReview)throw new Error('This post changed in Buffer after review began. Ask the creator to resend it.');var receiptCode=demoReceiptCode(),fingerprint=p.fingerprint||demoFingerprint(p),now=new Date().toISOString();p.status='approved';p.approvedBy=c.approvalOwner;p.approvedAt=now;p.receiptCode=receiptCode;p.fingerprint=fingerprint;p.comments=p.comments||[];p.comments.push({authorType:'client',authorName:p.approvedBy,body:'Final approval stamped with the owner code.',kind:'approval',createdAt:now});data.receipts.unshift({id:U.id('receipt'),receiptCode:receiptCode,postId:p.id,clientId:c.id,clientCompany:c.company,title:p.title,platform:p.platform,approverName:p.approvedBy,approvedAt:now,version:p.version,fingerprint:fingerprint,snapshot:{caption:p.caption,image:p.image,platform:p.platform}});saveDemo(data);return {receiptCode:receiptCode,approvedAt:now};
   }
   async function reset(){if(mode==='remote')throw new Error('Reset is only available in demo mode.');return resetDemo();}
   function getMode(){return mode;}
   function getConfig(){return config;}
-  function getBufferToken(){try{return localStorage.getItem('receipts_buffer_token')||'';}catch(e){return '';}}
-  function saveBufferToken(token){try{if(token)localStorage.setItem('receipts_buffer_token',token);else localStorage.removeItem('receipts_buffer_token');}catch(e){}}
+  function getBufferToken(){return ENABLE_BYO_BUFFER_KEY?bufferToken:'';}
+  function saveBufferToken(token){if(ENABLE_BYO_BUFFER_KEY)bufferToken=String(token||'');}
+  function byoBufferKeyEnabled(){return ENABLE_BYO_BUFFER_KEY;}
 
-  window.ReceiptsAPI={init:init,setSession:setSession,bootstrap:bootstrap,createClient:createClient,rotateClient:rotateClient,assignPost:assignPost,sendForReview:sendForReview,addCreatorComment:addCreatorComment,syncBuffer:syncBuffer,inviteClient:inviteClient,getPostDetail:getPostDetail,getReviewRoom:getReviewRoom,addReviewComment:addReviewComment,requestChanges:requestChanges,approvePost:approvePost,reset:reset,getMode:getMode,getConfig:getConfig,getBufferToken:getBufferToken,saveBufferToken:saveBufferToken};
+  window.ReceiptsAPI={init:init,setSession:setSession,bootstrap:bootstrap,createClient:createClient,rotateClient:rotateClient,updateRoomControls:updateRoomControls,assignPost:assignPost,sendForReview:sendForReview,addCreatorComment:addCreatorComment,selectBufferOrganization:selectBufferOrganization,syncBuffer:syncBuffer,inviteClient:inviteClient,resendApprovalEmail:resendApprovalEmail,getPostDetail:getPostDetail,getReviewRoom:getReviewRoom,addReviewComment:addReviewComment,requestChanges:requestChanges,approvePost:approvePost,reset:reset,getMode:getMode,getConfig:getConfig,getBufferToken:getBufferToken,saveBufferToken:saveBufferToken,byoBufferKeyEnabled:byoBufferKeyEnabled};
 })();
