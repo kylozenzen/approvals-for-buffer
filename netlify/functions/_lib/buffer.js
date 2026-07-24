@@ -52,13 +52,13 @@ function normalizeAssets(value){
   }));
 }
 
-async function getPosts(token){
+async function getPosts(token,selectedOrgId){
   if(!token)throw Object.assign(new Error('Add a Buffer API key in Settings or configure BUFFER_API_KEY in Netlify.'),{statusCode:400});
   const account=await call(token,'query GetOrganizations { account { organizations { id name ownerEmail } } }');
   const orgs=account&&account.data&&account.data.account&&account.data.account.organizations||[];
-  const orgId=(process.env.BUFFER_ORGANIZATION_ID||'').trim();
+  const orgId=(selectedOrgId||process.env.BUFFER_ORGANIZATION_ID||'').trim();
   const org=orgId?orgs.find(item=>item.id===orgId):orgs[0];
-  if(!org)return {posts:[],organization:null};
+  if(!org)return {posts:[],organization:null,organizations:orgs};
   const postsData=await call(token,POSTS_QUERY,{orgId:org.id,statuses:['draft','needs_approval','scheduled']});
   const edges=(postsData.data&&postsData.data.posts&&postsData.data.posts.edges)||[];
   const seen=new Set();
@@ -81,7 +81,7 @@ async function getPosts(token){
         createdAt:node.createdAt||new Date().toISOString()
       };
     });
-  return {posts,organization:{id:org.id,name:org.name,ownerEmail:org.ownerEmail||''},organizationCount:orgs.length};
+  return {posts,organization:{id:org.id,name:org.name,ownerEmail:org.ownerEmail||''},organizationCount:orgs.length,organizations:orgs.map(item=>({id:item.id,name:item.name})),truncated:edges.length>=50};
 }
 
 module.exports={getPosts};
