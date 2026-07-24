@@ -69,7 +69,7 @@ Copy `.env.example` into Netlify’s environment-variable panel. Required:
 - `RECEIPTS_ENCRYPTION_SECRET`
 - `APP_BASE_URL`
 
-For the easiest owner-only Buffer test, also add:
+Optional for an owner-managed test environment:
 
 - `BUFFER_API_KEY`
 
@@ -87,9 +87,9 @@ Optional:
 
 ### 4. Buffer connection modes
 
-**Simplest first test:** put your Buffer API key in Netlify as `BUFFER_API_KEY`. It remains server-side.
+**Cohort-1 beta:** each tester signs in, pastes their own Buffer API key in Settings, and syncs only their own Buffer content into approval rooms. The key is held only in page memory for the current tab/session; it is not written to `localStorage`, Supabase, or Receipts records. It is sent in the request header solely to perform the read-only Buffer sync, then must be pasted again after a refresh.
 
-**Small invite beta:** a tester may paste their own key in Settings. It is stored in that browser and transmitted only to the authenticated Netlify sync function. This is a temporary beta bridge; Buffer OAuth should replace BYO keys before a broad public launch.
+**Optional owner-managed mode:** configure `BUFFER_API_KEY` server-side when you want the deployed environment to supply a fallback key.
 
 Never commit a real Buffer key.
 
