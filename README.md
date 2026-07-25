@@ -47,10 +47,11 @@ Open `http://localhost:8888/app.html`. Without Supabase environment variables, t
 
 ### 1. Supabase
 
-Create a Supabase project and run:
+Create a Supabase project and run both migrations in order:
 
 ```text
 supabase/migrations/001_receipts_beta.sql
+supabase/migrations/002_beta_hardening.sql
 ```
 
 Enable Email/Magic Link authentication. Add your production Netlify URL and `https://YOUR-SITE.netlify.app/app` to Supabase Auth redirect URLs.

@@ -51,6 +51,16 @@
     if(mode==='remote')return creator('sendForReview',{postId:postId});
     var data=loadDemo(),p=postFor(data,postId);if(!p)throw new Error('Post not found');if(!p.clientId)throw new Error('Assign a client first');p.status='review';p.changedSinceReview=false;p.feedback='';p.reviewedVersion=p.version;p.comments=p.comments||[];p.comments.push({authorType:'creator',authorName:'You',body:'Sent this Buffer snapshot for approval.',kind:'system',createdAt:new Date().toISOString()});saveDemo(data);return {post:clone(p),data:clone(data)};
   }
+  async function assignAndSendForReview(postId,clientId){
+    if(mode==='remote')return creator('assignAndSendForReview',{postId:postId,clientId:clientId});
+    var data=loadDemo(),p=postFor(data,postId),c=clientFor(data,clientId);
+    if(!p)throw new Error('Post not found');
+    if(!c)throw new Error('Choose a client first');
+    if(p.status!=='draft'&&p.clientId&&p.clientId!==clientId)throw new Error('This post is already in another client room');
+    p.clientId=clientId;p.status='review';p.changedSinceReview=false;p.feedback='';p.reviewedVersion=p.version;p.comments=p.comments||[];
+    p.comments.push({authorType:'creator',authorName:'You',body:'Assigned to '+c.company+' and sent this Buffer snapshot for approval.',kind:'system',createdAt:new Date().toISOString()});
+    saveDemo(data);return {post:clone(p),client:clone(c),data:clone(data)};
+  }
   async function addCreatorComment(postId,body){
     if(mode==='remote')return creator('addCreatorComment',{postId:postId,body:body});
     var data=loadDemo(),p=postFor(data,postId);if(!p)throw new Error('Post not found');p.comments=p.comments||[];p.comments.push({authorType:'creator',authorName:'You',body:body,kind:'comment',createdAt:new Date().toISOString()});saveDemo(data);return {data:clone(data)};
@@ -92,5 +102,5 @@
   function saveBufferToken(token){if(ENABLE_BYO_BUFFER_KEY)bufferToken=String(token||'');}
   function byoBufferKeyEnabled(){return ENABLE_BYO_BUFFER_KEY;}
 
-  window.ReceiptsAPI={init:init,setSession:setSession,bootstrap:bootstrap,createClient:createClient,rotateClient:rotateClient,updateRoomControls:updateRoomControls,assignPost:assignPost,sendForReview:sendForReview,addCreatorComment:addCreatorComment,selectBufferOrganization:selectBufferOrganization,syncBuffer:syncBuffer,inviteClient:inviteClient,resendApprovalEmail:resendApprovalEmail,getPostDetail:getPostDetail,getReviewRoom:getReviewRoom,addReviewComment:addReviewComment,requestChanges:requestChanges,approvePost:approvePost,reset:reset,getMode:getMode,getConfig:getConfig,getBufferToken:getBufferToken,saveBufferToken:saveBufferToken,byoBufferKeyEnabled:byoBufferKeyEnabled};
+  window.ReceiptsAPI={init:init,setSession:setSession,bootstrap:bootstrap,createClient:createClient,rotateClient:rotateClient,updateRoomControls:updateRoomControls,assignPost:assignPost,sendForReview:sendForReview,assignAndSendForReview:assignAndSendForReview,addCreatorComment:addCreatorComment,selectBufferOrganization:selectBufferOrganization,syncBuffer:syncBuffer,inviteClient:inviteClient,resendApprovalEmail:resendApprovalEmail,getPostDetail:getPostDetail,getReviewRoom:getReviewRoom,addReviewComment:addReviewComment,requestChanges:requestChanges,approvePost:approvePost,reset:reset,getMode:getMode,getConfig:getConfig,getBufferToken:getBufferToken,saveBufferToken:saveBufferToken,byoBufferKeyEnabled:byoBufferKeyEnabled};
 })();

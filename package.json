@@ -5,6 +5,7 @@
   "description": "A Buffer-only client approval layer: sync posts, share a review room, stamp approval, and keep the receipt.",
   "scripts": {
     "check": "node scripts/check.js",
+    "test": "npm run check && node scripts/test-buffer.js && node scripts/test-demo-flow.js && node scripts/test-review-snapshot.js",
     "serve": "npx --yes serve . -l 8888"
   },
   "engines": {

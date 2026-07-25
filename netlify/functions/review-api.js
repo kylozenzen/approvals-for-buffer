@@ -5,9 +5,42 @@ const C=require('./_lib/crypto');
 const Mail=require('./_lib/email');
 function q(v){return encodeURIComponent(v);}
 function mapComment(row){return {id:row.id,authorType:row.author_type,authorName:row.author_name,body:row.body,kind:row.kind,createdAt:row.created_at};}
-function mapPublicItem(row,comments){return {id:row.id,title:row.title,caption:row.caption||'',image:row.image_url||'',platform:row.platform||'Buffer',status:row.status,version:row.version||1,changedSinceReview:Boolean(row.changed_since_review),feedback:row.feedback||'',approvedBy:row.approved_by,approvedAt:row.approved_at,receiptCode:row.receipt_code,comments:comments||[]};}
+function mapPublicItem(row,snapshot,comments){
+  const saved=snapshot||{};
+  const payload=saved.snapshot_json||{};
+  return {
+    id:row.id,
+    title:row.title,
+    caption:saved.caption||payload.caption||'',
+    image:saved.image_url||payload.imageUrl||'',
+    platform:saved.platform||payload.platform||'Buffer',
+    status:row.status,
+    version:saved.version||row.version||1,
+    changedSinceReview:Boolean(row.changed_since_review),
+    feedback:row.feedback||'',
+    approvedBy:row.approved_by,
+    approvedAt:row.approved_at,
+    receiptCode:row.receipt_code,
+    comments:comments||[]
+  };
+}
 async function clientByToken(token){if(!token)return null;const client=await db.one('clients','select=*&room_token_hash=eq.'+q(C.sha256(token))+'&active=eq.true');if(client&&client.room_token_expires_at&&new Date(client.room_token_expires_at)<=new Date())throw Object.assign(new Error('This approval room link has expired; ask the creator for a fresh link.'),{statusCode:410});return client;}
-async function roomPayload(client){const rows=await db.select('content_items','select=*&client_id=eq.'+q(client.id)+'&archived=eq.false&status=neq.draft&order=updated_at.desc');const ids=rows.map(x=>x.id);let comments=[];if(ids.length)comments=await db.select('comments','select=*&content_item_id=in.('+ids.join(',')+')&order=created_at.asc');const grouped={};comments.forEach(x=>{(grouped[x.content_item_id]||(grouped[x.content_item_id]=[])).push(mapComment(x));});return {client:{id:client.id,company:client.company,approvalOwner:client.approval_owner,approvalNote:client.approval_note||'',color:client.color||'#cafd00',initials:client.initials||''},posts:rows.map(x=>mapPublicItem(x,grouped[x.id]||[]))};}
+async function roomPayload(client){
+  const rows=await db.select('content_items','select=*&client_id=eq.'+q(client.id)+'&archived=eq.false&status=neq.draft&order=updated_at.desc');
+  const ids=rows.map(x=>x.id);
+  const snapshotIds=rows.map(x=>x.review_snapshot_id).filter(Boolean);
+  const [comments,snapshots]=await Promise.all([
+    ids.length?db.select('comments','select=*&content_item_id=in.('+ids.join(',')+')&order=created_at.asc'):Promise.resolve([]),
+    snapshotIds.length?db.select('content_snapshots','select=*&id=in.('+snapshotIds.join(',')+')'):Promise.resolve([])
+  ]);
+  const grouped={},bySnapshot={};
+  comments.forEach(x=>{(grouped[x.content_item_id]||(grouped[x.content_item_id]=[])).push(mapComment(x));});
+  snapshots.forEach(x=>{bySnapshot[x.id]=x;});
+  return {
+    client:{id:client.id,company:client.company,approvalOwner:client.approval_owner,approvalNote:client.approval_note||'',color:client.color||'#cafd00',initials:client.initials||''},
+    posts:rows.map(x=>mapPublicItem(x,bySnapshot[x.review_snapshot_id],grouped[x.id]||[]))
+  };
+}
 async function verifyRoomItem(client,postId){const item=await db.one('content_items','select=*&id=eq.'+q(postId)+'&client_id=eq.'+q(client.id)+'&archived=eq.false');if(!item)throw Object.assign(new Error('Post not found in this approval room.'),{statusCode:404});return item;}
 function cleanName(value,fallback){return String(value||fallback||'Client').trim().slice(0,80);}
 function cleanBody(value){return String(value||'').trim().slice(0,4000);}

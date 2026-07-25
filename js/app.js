@@ -2,7 +2,7 @@
 (function(){
   var U=window.ReceiptsUtil,API=window.ReceiptsAPI,UI=window.ReceiptsUI,Auth=window.ReceiptsAuth;
   var app=document.getElementById('app');
-  var state={page:'board',data:null,session:null,reviewToken:null,room:null};
+  var state={page:'board',data:null,session:null,reviewToken:null,room:null,bufferOrganizations:[]};
 
   function getReviewToken(){var m=window.location.pathname.match(/^\/(?:review|r)\/([^/]+)/);if(m)return decodeURIComponent(m[1]);var q=new URLSearchParams(window.location.search);return q.get('review')||q.get('stamp');}
   function render(){if(state.reviewToken){if(state.room)app.innerHTML=UI.reviewRoom(state.room,state.reviewToken);return;}if(API.getMode()==='remote'&&!state.session){app.innerHTML=UI.login();return;}if(!state.data){app.innerHTML=UI.loading();return;}app.innerHTML=UI.renderCreator(state);}
@@ -12,14 +12,52 @@
   async function boot(){app.innerHTML=UI.loading();try{var auth=await Auth.init();state.session=auth.session;state.reviewToken=getReviewToken();if(state.reviewToken)return loadRoom();if(auth.mode==='remote'&&!auth.session){render();return;}await loadCreator();}catch(e){app.innerHTML=UI.error(e.message);}}
   function onAuthChange(session){state.session=session;if(state.reviewToken)return;if(session)loadCreator();else{state.data=null;render();}}
   async function run(task,success){try{await task();if(success)U.toast(success);await refresh();}catch(e){U.toast(e.message||'Something went wrong');}}
+  async function performSync(){
+    try{
+      U.toast('Syncing Buffer…');
+      var out=await API.syncBuffer(API.getBufferToken());
+      state.bufferOrganizations=out.organizations||[];
+      await refresh();
+      var total=(out.added||0)+(out.updated||0);
+      U.toast(total?'Buffer synced · '+total+' post'+(total===1?'':'s')+' checked':'Buffer synced · no active posts found');
+      if(out.truncated)U.toast('Buffer returned the first 50 active posts.');
+      var selected=state.data&&state.data.profile&&state.data.profile.bufferOrganizationId;
+      if(out.organizationCount>1&&!selected)U.openModal(UI.organizationModal(state.bufferOrganizations,out.organization&&out.organization.id));
+      return out;
+    }catch(e){U.toast(e.message||'Buffer sync failed');return null;}
+  }
 
   window.ReceiptsActions={
     go:function(page){state.page=page;render();window.scrollTo(0,0);},
-    sync:function(){var token=API.getBufferToken();run(async function(){var out=await API.syncBuffer(token);if(out.truncated)U.toast('Buffer returned 50 posts; refine the organization before relying on this board.');return out;},'Buffer sync complete');},
+    openSync:function(){
+      var hasServerKey=Boolean(API.getConfig().bufferKeyConfigured);
+      if(API.getMode()==='demo'||API.getBufferToken()||hasServerKey){performSync();return;}
+      U.openModal(UI.syncModal());
+    },
+    sync:function(){this.openSync();},
+    syncFromModal:function(){
+      var el=document.getElementById('sync-buffer-token'),token=el?el.value.trim():'';
+      if(!token){U.toast('Paste a Buffer API key first');return;}
+      API.saveBufferToken(token);U.closeModal();performSync();
+    },
+    chooseOrganization:async function(organizationId){
+      if(!organizationId){U.toast('Choose a Buffer organization');return;}
+      U.closeModal();
+      try{await API.selectBufferOrganization(organizationId);await performSync();}catch(e){U.toast(e.message||'Could not select that Buffer organization');}
+    },
     newClient:function(){U.openModal(UI.newClientModal());},
     createClient:function(){var company=document.getElementById('new-company').value.trim(),owner=document.getElementById('new-owner').value.trim(),email=document.getElementById('new-email').value.trim();if(!company||!owner||!email){U.toast('Company, owner, and email are required');return;}var payload={company:company,name:owner,approvalOwner:owner,email:email,approvalNote:document.getElementById('new-note').value.trim(),color:document.getElementById('new-color').value};run(function(){return API.createClient(payload);},'Client room created');U.closeModal();},
     openPost:async function(id){try{var detail=await API.getPostDetail(id);U.openModal(UI.postModal(detail,state.data));}catch(e){U.toast(e.message);}},
     assign:function(postId,clientId){run(function(){return API.assignPost(postId,clientId||null);},clientId?'Client assigned':'Post unassigned');U.closeModal();},
+    saveAssignment:function(postId){
+      var el=document.getElementById('post-client'),clientId=el?el.value:'';
+      run(function(){return API.assignPost(postId,clientId||null);},clientId?'Client assigned':'Post unassigned');U.closeModal();
+    },
+    assignAndReview:function(postId){
+      var el=document.getElementById('post-client'),clientId=el?el.value:'';
+      if(!clientId){U.toast('Choose a client first');return;}
+      run(function(){return API.assignAndSendForReview(postId,clientId);},'Assigned and sent for review');U.closeModal();
+    },
     sendReview:function(postId){run(function(){return API.sendForReview(postId);},'Latest Buffer snapshot sent for review');U.closeModal();},
     creatorComment:function(postId){var el=document.getElementById('creator-comment'),body=el?el.value.trim():'';if(!body){U.toast('Write a note first');return;}run(function(){return API.addCreatorComment(postId,body);},'Creator note added');U.closeModal();},
     copyRoom:function(clientId){var c=(state.data.clients||[]).find(function(x){return x.id===clientId;});if(c&&c.roomToken)U.copy(U.roomUrl(c.roomToken),'Approval room copied');else U.toast('Rotate the room link to create a new one');},

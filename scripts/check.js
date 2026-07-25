@@ -3,7 +3,7 @@ const fs=require('fs');
 const path=require('path');
 const {spawnSync}=require('child_process');
 const root=path.resolve(__dirname,'..');
-const required=['index.html','app.html','netlify.toml','.env.example','supabase/migrations/001_receipts_beta.sql'];
+const required=['index.html','app.html','netlify.toml','.env.example','supabase/migrations/001_receipts_beta.sql','supabase/migrations/002_beta_hardening.sql'];
 let failed=false;
 for(const file of required){
   if(!fs.existsSync(path.join(root,file))){console.error('Missing required file:',file);failed=true;}

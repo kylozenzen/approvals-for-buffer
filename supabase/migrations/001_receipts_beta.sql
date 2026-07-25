@@ -7,6 +7,7 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null default '',
   display_name text not null default '',
+  buffer_organization_id text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -27,6 +28,8 @@ create table if not exists public.clients (
   color_text text not null default '#0d0f0c',
   initials text not null default '',
   active boolean not null default true,
+  approval_locked_until timestamptz,
+  room_token_expires_at timestamptz not null default (now()+interval '30 days'),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
