@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Receipts — Client approval for Buffer</title>
+  <title>Receipts — Client approvals for Buffer</title>
   <meta name="description" content="Pull posts from Buffer into simple client review rooms, collect feedback and final approval, and keep a receipt of exactly what was approved.">
   <meta name="theme-color" content="#10120f">
   <meta property="og:title" content="Receipts — The client approval layer for Buffer">
@@ -26,25 +26,32 @@
   <main id="main">
     <section id="top" class="hero page-pad">
       <div class="hero-copy">
-        <p class="eyebrow">Client approval for Buffer</p>
-        <h1>Client approval for Buffer.<br><em>Without another content calendar.</em></h1>
+        <p class="eyebrow">Client approvals for Buffer</p>
+        <h1>Client approvals for Buffer.<br><em>Without another content calendar.</em></h1>
         <p class="hero-sub">Your posts already live in Buffer. Receipts gives clients one clean place to review them, request changes, give final approval, and leaves you with proof of exactly what they approved.</p>
         <div class="hero-actions"><a class="button primary" href="/app">Try the limited beta <span aria-hidden="true">↗</span></a><a class="button secondary" href="#how">See how it works <span aria-hidden="true">↓</span></a></div>
         <ul class="reassurance" aria-label="Product highlights"><li>Buffer stays the source of truth</li><li>Clients don't need accounts</li><li>Approved versions get receipts</li></ul>
         <div class="beta-note"><span class="badge">Limited beta</span><p>Receipts works today, but I'm intentionally testing it with a small group before building the next layer. Expect rough edges. Send feedback. Help shape what comes next.</p></div>
       </div>
 
-      <div class="hero-visual" aria-label="A post moving from Buffer through review to an approval receipt">
-        <div class="flow-labels"><span>From Buffer</span><i>→</i><span>Waiting for approval</span><i>→</i><span>Changes</span><i>→</i><span>Approved</span></div>
+      <div class="hero-visual" aria-label="Illustration of the Receipts creator board moving posts from Buffer to approval">
         <div class="product-window">
-          <header><span><i></i><i></i><i></i></span><b>Creator board</b><small>Buffer connected <strong>●</strong></small></header>
-          <div class="board">
-            <article><label>From Buffer</label><div class="post-card"><span class="callout">Pulled from Buffer</span><small>LINKEDIN · TODAY</small><h3>Three things we learned building in public.</h3><p>Progress is more interesting when you show the middle, not just the launch.</p><footer><span>Draft</span><b>Open →</b></footer></div></article>
-            <article><label>In review</label><div class="post-card review-card"><span class="callout">No client login</span><small>CLIENT ROOM · ACME</small><h3>Ready for a second look?</h3><p class="comment">“Can we make the last line clearer?”</p><footer><span>1 comment</span><b>Changes</b></footer></div></article>
-            <article><label>Approved</label><div class="post-card approved-card"><span class="stamp">Approved</span><small>SNAPSHOT V3</small><h3>Final copy, exactly as reviewed.</h3><p>Approved by Maya · 10:42 AM</p><footer><span>Final approval stamped</span><b>✓</b></footer></div></article>
+          <header><span><i></i><i></i><i></i></span><b>Receipts approval room</b></header>
+          <div class="product-shell">
+            <aside class="preview-sidebar" aria-hidden="true"><strong><i>✓</i> Receipts</strong><span class="active">Board</span><span>Clients</span><span>Receipts</span><small>● Buffer connected</small></aside>
+            <div class="board-wrap">
+              <div class="board-head"><div><small>CLIENT CONTENT</small><strong>6 posts</strong></div><span>Sync Buffer</span></div>
+              <div class="board">
+                <article><label>From Buffer</label><div class="post-card"><span class="card-accent slate"></span><h3>Unassigned draft</h3><p>Choose a client</p></div></article>
+                <article><label>Waiting</label><div class="post-card review-card"><span class="card-accent cyan"></span><h3>Behind the bar reel</h3><p>Owner code required</p></div></article>
+                <article><label>Changes</label><div class="post-card changes-card"><span class="card-accent coral"></span><h3>Weekend hours</h3><p>Fix closing time</p></div></article>
+                <article><label>Approved</label><div class="post-card approved-card"><span class="card-accent lime"></span><h3>Fall tap list</h3><p>Receipt #RCP-84N2K7</p></div></article>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="saved-card"><span aria-hidden="true">✓</span><div><b>Receipt saved</b><small>RCP-84N2K7 · Snapshot v3</small></div></div>
+        <div class="visual-callout approval-callout"><span aria-hidden="true">✹</span><div><b>Approval stamped</b><small>Receipt saved to the paper trail</small></div></div>
+        <div class="owner-code"><small>OWNER CODE</small><b>482193</b><span>Only the code holder can stamp approval.</span></div>
       </div>
     </section>
 
