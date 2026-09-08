@@ -3,13 +3,23 @@
   var U=window.ReceiptsUtil,API=window.ReceiptsAPI,UI=window.ReceiptsUI,Auth=window.ReceiptsAuth;
   var app=document.getElementById('app');
   var state={page:'board',data:null,session:null,reviewToken:null,room:null,bufferOrganizations:[]};
+  var WALKTHROUGH_KEY='receipts_frictionless_walkthrough_complete_v1';
+  var RECEIPT_NUDGE_KEY='receipts_frictionless_receipt_nudge_v1';
 
   function getReviewToken(){var m=window.location.pathname.match(/^\/(?:review|r)\/([^/]+)/);if(m)return decodeURIComponent(m[1]);var q=new URLSearchParams(window.location.search);return q.get('review')||q.get('stamp');}
-  function render(){if(state.reviewToken){if(state.room)app.innerHTML=UI.reviewRoom(state.room,state.reviewToken);return;}if(API.getMode()==='remote'&&!state.session){app.innerHTML=UI.login();return;}if(!state.data){app.innerHTML=UI.loading();return;}app.innerHTML=UI.renderCreator(state);}
-  async function loadCreator(){app.innerHTML=UI.loading('Loading your approval board…');try{state.data=await API.bootstrap();render();}catch(e){app.innerHTML=UI.error(e.message);}}
+  function render(){if(state.reviewToken){if(state.room)app.innerHTML=UI.reviewRoom(state.room,state.reviewToken);return;}if(API.getMode()==='remote'&&!state.session){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError('Your browser-based beta session ended. Refresh to start or recover your workspace.'):UI.login();return;}if(!state.data){app.innerHTML=UI.loading();return;}app.innerHTML=UI.renderCreator(state);}
+  function afterCreatorLoad(){
+    if(!API.getConfig().frictionlessBeta)return;
+    if(localStorage.getItem(WALKTHROUGH_KEY)!=='true'){U.openModal(UI.walkthrough(0));return;}
+    if((state.data.receipts||[]).length&&localStorage.getItem(RECEIPT_NUDGE_KEY)!=='true'){
+      localStorage.setItem(RECEIPT_NUDGE_KEY,'true');
+      document.getElementById('nudge-root').innerHTML=UI.approvalNudge();
+    }
+  }
+  async function loadCreator(){app.innerHTML=UI.loading('Loading your approval board…');try{state.data=await API.bootstrap();render();afterCreatorLoad();}catch(e){app.innerHTML=UI.error(e.message);}}
   async function loadRoom(){app.innerHTML=UI.loading('Opening approval room…');try{state.room=await API.getReviewRoom(state.reviewToken);render();}catch(e){app.innerHTML=UI.error(e.message);}}
   async function refresh(){if(state.reviewToken)return loadRoom();return loadCreator();}
-  async function boot(){app.innerHTML=UI.loading();try{var auth=await Auth.init();state.session=auth.session;state.reviewToken=getReviewToken();if(state.reviewToken)return loadRoom();if(auth.mode==='remote'&&!auth.session){render();return;}await loadCreator();}catch(e){app.innerHTML=UI.error(e.message);}}
+  async function boot(){app.innerHTML=UI.loading();state.reviewToken=getReviewToken();try{if(state.reviewToken){await API.init();return loadRoom();}var auth=await Auth.init();state.session=auth.session;if(auth.mode==='remote'&&!auth.session){render();return;}await loadCreator();}catch(e){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError(e.message):UI.error(e.message);}}
   function onAuthChange(session){state.session=session;if(state.reviewToken)return;if(session)loadCreator();else{state.data=null;render();}}
   async function run(task,success){try{await task();if(success)U.toast(success);await refresh();}catch(e){U.toast(e.message||'Something went wrong');}}
   async function performSync(){
@@ -71,6 +81,25 @@
     saveOrganization:function(){var el=document.getElementById('buffer-organization');if(!el||!el.value.trim()){U.toast('Enter a Buffer organization ID');return;}run(function(){return API.selectBufferOrganization(el.value.trim());},'Buffer organization saved');},
     saveToken:function(){var el=document.getElementById('buffer-token');API.saveBufferToken(el?el.value.trim():'');U.toast('Buffer key is available for this session only');},
     clearToken:function(){API.saveBufferToken('');var el=document.getElementById('buffer-token');if(el)el.value='';U.toast('Buffer key cleared');},
+    help:function(kind){U.openModal(UI.helpModal(kind));},
+    replayWalkthrough:function(){U.openModal(UI.walkthrough(0));},
+    walkthroughNext:function(step){if(step<4){U.openModal(UI.walkthrough(step));return;}this.finishWalkthrough(true);},
+    finishWalkthrough:function(connect){localStorage.setItem(WALKTHROUGH_KEY,'true');U.closeModal();if(connect)this.openSync();},
+    openFeedback:function(){this.dismissNudge();U.openModal(UI.feedbackModal());setTimeout(function(){var form=document.getElementById('beta-feedback-form');if(form)form.addEventListener('submit',window.ReceiptsActions.submitFeedback);},0);},
+    submitFeedback:async function(event){
+      event.preventDefault();var form=event.currentTarget,button=form.querySelector('[type="submit"]'),error=document.getElementById('feedback-error');
+      var messageField=form.elements.namedItem('message');
+      if(!messageField.value.trim()){error.textContent='Tell us what happened before sending.';return;}
+      var fields={
+        'form-name':'beta-feedback',name:form.elements.namedItem('name').value.trim(),email:form.elements.namedItem('email').value.trim(),what_happened:form.elements.namedItem('what_happened').value,message:messageField.value.trim(),
+        creator_page:state.page,timestamp:new Date().toISOString(),user_agent:navigator.userAgent,
+        creator_id:state.session&&state.session.user?state.session.user.id:'',frictionless_beta:String(Boolean(API.getConfig().frictionlessBeta))
+      };
+      button.disabled=true;error.textContent='';
+      try{var response=await fetch('/',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(fields).toString()});if(!response.ok)throw new Error('Feedback could not be sent. Please try again.');U.closeModal();U.toast('Thanks — feedback sent.');}
+      catch(e){button.disabled=false;error.textContent=e.message||'Feedback could not be sent. Your message is still here.';}
+    },
+    dismissNudge:function(){document.getElementById('nudge-root').innerHTML='';},
     resetDemo:function(){if(!window.confirm('Reset the interactive demo?'))return;run(function(){return API.reset();},'Demo restored');},
     login:async function(){var el=document.getElementById('login-email'),email=el?el.value.trim():'';if(!email){U.toast('Enter your email');return;}try{await Auth.sendMagicLink(email);U.toast('Magic link sent—check your email');}catch(e){U.toast(e.message);}},
     signOut:async function(){await Auth.signOut();}

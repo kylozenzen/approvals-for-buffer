@@ -12,7 +12,13 @@
     if(!window.supabase||!window.supabase.createClient)throw new Error('Supabase client library did not load.');
     client=window.supabase.createClient(started.config.supabaseUrl,started.config.supabaseAnonKey,{auth:{persistSession:true,detectSessionInUrl:true,autoRefreshToken:true}});
     var result=await client.auth.getSession();
+    if(result.error)throw result.error;
     session=result.data.session||null;
+    if(!session&&started.config.frictionlessBeta){
+      var anonymous=await client.auth.signInAnonymously();
+      if(anonymous.error||!anonymous.data||!anonymous.data.session)throw new Error('We could not start your temporary beta workspace. Please refresh and try again.');
+      session=anonymous.data.session;
+    }
     window.ReceiptsAPI.setSession(session);
     client.auth.onAuthStateChange(function(_event,next){session=next||null;window.ReceiptsAPI.setSession(session);if(window.ReceiptsApp&&window.ReceiptsApp.onAuthChange)window.ReceiptsApp.onAuthChange(session);});
     return {mode:'remote',session:session};
