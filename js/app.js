@@ -22,7 +22,8 @@
   async function boot(){app.innerHTML=UI.loading();state.reviewToken=getReviewToken();try{if(state.reviewToken){await API.init();return loadRoom();}var auth=await Auth.init();state.session=auth.session;if(auth.mode==='remote'&&!auth.session){render();return;}await loadCreator();}catch(e){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError(e.message):UI.error(e.message);}}
   function onAuthChange(session){state.session=session;if(state.reviewToken)return;if(session)loadCreator();else{state.data=null;render();}}
   async function run(task,success){try{await task();if(success)U.toast(success);await refresh();}catch(e){U.toast(e.message||'Something went wrong');}}
-  async function performSync(){
+  async function performSync(options){
+    options=options||{};
     try{
       U.toast('Syncing Buffer…');
       var out=await API.syncBuffer(API.getBufferToken());
@@ -32,9 +33,9 @@
       U.toast(total?'Buffer synced · '+total+' post'+(total===1?'':'s')+' checked':'Buffer synced · no active posts found');
       if(out.truncated)U.toast('Buffer returned the first 50 active posts.');
       var selected=state.data&&state.data.profile&&state.data.profile.bufferOrganizationId;
-      if(out.organizationCount>1&&!selected)U.openModal(UI.organizationModal(state.bufferOrganizations,out.organization&&out.organization.id));
+      if(out.organizationCount>1&&!selected&&!options.deferOrganization)U.openModal(UI.organizationModal(state.bufferOrganizations,out.organization&&out.organization.id));
       return out;
-    }catch(e){U.toast(e.message||'Buffer sync failed');return null;}
+    }catch(e){if(options.throwOnError)throw e;U.toast(e.message||'Buffer sync failed');return null;}
   }
 
   window.ReceiptsActions={
@@ -45,10 +46,25 @@
       U.openModal(UI.syncModal());
     },
     sync:function(){this.openSync();},
-    syncFromModal:function(){
-      var el=document.getElementById('sync-buffer-token'),token=el?el.value.trim():'';
-      if(!token){U.toast('Paste a Buffer API key first');return;}
-      API.saveBufferToken(token);U.closeModal();performSync();
+    syncFromModal:async function(){
+      var el=document.getElementById('sync-buffer-token'),error=document.getElementById('sync-error'),button=document.getElementById('sync-connect-button');
+      var rawToken=el?el.value:'',token=rawToken.trim(),buttonLabel=button?button.innerHTML:'';
+      if(!token||/\s/.test(rawToken)||token.length<20){
+        if(error)error.textContent=!token?'Paste a Buffer API key first.':/\s/.test(rawToken)?'Buffer API keys cannot contain spaces.':'That key looks too short to be a Buffer API key.';
+        return;
+      }
+      if(error)error.textContent='';
+      if(button){button.disabled=true;button.textContent='Connecting…';}
+      API.saveBufferToken(token);
+      try{
+        var out=await performSync({throwOnError:true,deferOrganization:true});
+        U.closeModal();
+        var selected=state.data&&state.data.profile&&state.data.profile.bufferOrganizationId;
+        if(out.organizationCount>1&&!selected)U.openModal(UI.organizationModal(state.bufferOrganizations,out.organization&&out.organization.id));
+      }catch(e){
+        if(error)error.textContent=e.message||'Buffer sync failed. Please check your key and try again.';
+        if(button){button.disabled=false;button.innerHTML=buttonLabel;}
+      }
     },
     chooseOrganization:async function(organizationId){
       if(!organizationId){U.toast('Choose a Buffer organization');return;}
