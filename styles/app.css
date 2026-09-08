@@ -686,6 +686,25 @@ button {
   font-weight: 800;
   text-decoration: underline;
 }
+.sync-key-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.sync-key-row .input {
+  min-width: 0;
+}
+.sync-key-row .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.modal-error {
+  min-height: 1.4em;
+  margin-top: 6px;
+  color: var(--coral);
+  font-size: 12px;
+  font-weight: 700;
+}
 .receipt-list {
   display: grid;
   gap: 10px;
