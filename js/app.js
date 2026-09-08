@@ -66,7 +66,7 @@
     roomControls:function(clientId){var c=(state.data.clients||[]).find(function(x){return x.id===clientId;}),expires=window.prompt('Room link expiry (ISO date/time)',c&&c.roomTokenExpiresAt?c.roomTokenExpiresAt:'');if(expires===null)return;run(function(){return API.updateRoomControls(clientId,{expiresAt:expires,clearLock:Boolean(c&&c.approvalLockedUntil)});},'Room controls updated');},
     clearLock:function(clientId){run(function(){return API.updateRoomControls(clientId,{clearLock:true});},'Approval lock cleared');},
     rotate:function(clientId,kind){if(!window.confirm('Rotate this '+(kind==='room'?'room link':'owner code')+'? The old one will stop working.'))return;run(function(){return API.rotateClient(clientId,kind);},kind==='room'?'Room link rotated':'Owner code rotated');},
-    resendReceipt:function(id){run(function(){return API.resendApprovalEmail(id);},'Approval email resent');},
+    resendReceipt:function(id){run(async function(){var out=await API.resendApprovalEmail(id);U.toast(out.sent?'Approval email resent':'Email notification was not sent because email delivery is not configured.');return out;});},
     openReceipt:function(id){var r=(state.data.receipts||[]).find(function(x){return x.id===id;});if(r)U.openModal(UI.receiptModal(r));},
     saveOrganization:function(){var el=document.getElementById('buffer-organization');if(!el||!el.value.trim()){U.toast('Enter a Buffer organization ID');return;}run(function(){return API.selectBufferOrganization(el.value.trim());},'Buffer organization saved');},
     saveToken:function(){var el=document.getElementById('buffer-token');API.saveBufferToken(el?el.value.trim():'');U.toast('Buffer key is available for this session only');},
@@ -81,7 +81,7 @@
     comment:function(token,postId){var v=reviewValues(postId);if(!v.body){U.toast('Write a comment first');return;}run(function(){return API.addReviewComment(token,postId,v.name,v.body);},'Comment added');},
     changes:function(token,postId){var v=reviewValues(postId);if(!v.body){U.toast('Describe the requested change first');return;}run(function(){return API.requestChanges(token,postId,v.name,v.body);},'Changes requested');},
     approveModal:function(token,postId){U.openModal(UI.approveModal(token,postId));setTimeout(function(){var el=document.getElementById('approval-code');if(el)el.focus();},50);},
-    approve:function(token,postId){var code=document.getElementById('approval-code'),c=code?code.value.trim():'';if(!/^\d{6}$/.test(c)){U.toast('Enter the six-digit owner code');return;}run(async function(){var out=await API.approvePost(token,postId,'',c);if(out.emailSent===false)U.toast('Approval saved, but email delivery failed. Ask the creator to resend it.');return out;},'Approval stamped and receipt saved');U.closeModal();}
+    approve:function(token,postId){var code=document.getElementById('approval-code'),c=code?code.value.trim():'';if(!/^\d{6}$/.test(c)){U.toast('Enter the six-digit owner code');return;}run(async function(){var out=await API.approvePost(token,postId,'',c);U.toast(out.emailSent===false?'Approval saved and receipt created. Email notification was not sent because email delivery is not configured.':'Approval stamped, receipt saved, and email sent.');return out;});U.closeModal();}
   };
 
   window.ReceiptsApp={state:state,onAuthChange:onAuthChange,refresh:refresh};
