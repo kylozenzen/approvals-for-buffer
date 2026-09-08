@@ -15,8 +15,24 @@
 </head>
 <body>
   <div id="toast" role="status" aria-live="polite"></div>
+  <div id="nudge-root"></div>
   <div id="modal-root"></div>
   <div id="app"></div>
+
+  <!-- Netlify's deploy scanner uses this blueprint for the JS-rendered feedback form. -->
+  <form name="beta-feedback" data-netlify="true" netlify-honeypot="bot-field" hidden>
+    <input type="hidden" name="form-name" value="beta-feedback">
+    <input name="bot-field">
+    <input name="name">
+    <input name="email">
+    <select name="what_happened"><option>Other</option></select>
+    <textarea name="message"></textarea>
+    <input name="creator_page">
+    <input name="timestamp">
+    <input name="user_agent">
+    <input name="creator_id">
+    <input name="frictionless_beta">
+  </form>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="/js/demo-data.js"></script>
