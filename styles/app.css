@@ -454,29 +454,11 @@ button {
   height: 100%;
   object-fit: cover;
 }
-.post-media.placeholder {
-  display: grid;
-  place-items: center;
-  background: linear-gradient(135deg, #edf0e8, #c8cec1);
-  color: #7e8478;
-}
-.post-media.placeholder span {
-  font-size: 34px;
-}
-.post-source {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  background: rgba(13, 15, 12, 0.78);
-  color: #fff;
-  padding: 5px 7px;
-  border-radius: 7px;
-  font:
-    700 9px "Plus Jakarta Sans",
-    sans-serif;
-}
 .post-body {
   padding: 12px;
+}
+.post-card.text-only .post-body {
+  padding-top: 14px;
 }
 .post-top {
   display: flex;
@@ -932,7 +914,42 @@ textarea.input {
 .post-detail-media img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+}
+.source-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  color: #999;
+  font: 700 9px "Plus Jakarta Sans", sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.source-pill {
+  padding: 3px 6px;
+  border: 1px solid #deded8;
+  border-radius: 999px;
+  background: #f6f5f1;
+  color: #6f716b;
+  letter-spacing: 0.08em;
+}
+.post-meta .source-meta {
+  margin-top: 0;
+  justify-content: flex-end;
+}
+.modal-title-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.modal-title-meta .source-meta {
+  margin-top: 5px;
+}
+.modal-title-meta .badge {
+  margin-top: 5px;
 }
 .caption-box {
   white-space: pre-wrap;
@@ -1056,19 +1073,28 @@ textarea.input {
 }
 .review-card-grid {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: minmax(220px, 250px) minmax(0, 1fr);
+  align-items: start;
+}
+.review-card.text-only .review-card-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 .review-card-media {
-  min-height: 260px;
+  width: 100%;
+  max-height: 400px;
   background: linear-gradient(135deg, #d8ddd0, #aab1a4);
   display: grid;
   place-items: center;
   color: #777;
+  overflow: hidden;
+  align-self: start;
 }
 .review-card-media img {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  max-height: 400px;
+  height: auto;
+  object-fit: contain;
+  display: block;
 }
 .review-card-content {
   padding: 18px;
@@ -1325,7 +1351,12 @@ textarea.input {
     grid-template-columns: 1fr;
   }
   .review-card-media {
-    min-height: 220px;
+    width: 100%;
+    max-height: 400px;
+  }
+  .review-card-media img {
+    max-height: 400px;
+    margin: 0 auto;
   }
   .receipt-list-card {
     grid-template-columns: 44px 1fr;
