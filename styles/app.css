@@ -647,6 +647,45 @@ button {
     sans-serif;
   letter-spacing: 0.13em;
 }
+.room-expiry {
+  color: rgba(247, 246, 241, 0.65);
+  font-size: 10px;
+  font-weight: 800;
+  margin: -3px 0 11px;
+}
+.room-expiry.warning { color: #ffcc66; }
+.room-expiry.danger { color: #ff8064; }
+.kit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.kit-actions .btn { padding: 9px 11px; }
+.kit-guidance {
+  color: rgba(247, 246, 241, 0.55);
+  font-size: 10px;
+  line-height: 1.5;
+  margin: 9px 0 0;
+}
+.approval-lock {
+  align-items: center;
+  background: #fff0ec;
+  border: 1px solid #f6b4a5;
+  border-radius: 10px;
+  color: #a22e16;
+  display: flex;
+  font-size: 10px;
+  font-weight: 800;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+.approval-lock button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+}
 .tiny-actions {
   display: flex;
   gap: 7px;
@@ -667,6 +706,22 @@ button {
   background: var(--lime);
   color: var(--lime-ink);
 }
+.tiny-actions button.danger {
+  background: #fff0ec;
+  color: #b33218;
+}
+.expiry-options { display: grid; gap: 9px; }
+.expiry-options label {
+  align-items: center;
+  border: 1px solid #deddd6;
+  border-radius: 11px;
+  cursor: pointer;
+  display: flex;
+  gap: 11px;
+  padding: 12px;
+}
+.expiry-options span, .expiry-options b, .expiry-options small { display: block; }
+.expiry-options small { color: #888; margin-top: 3px; }
 .post-actions {
   align-items: center;
 }
