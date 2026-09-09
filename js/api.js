@@ -42,7 +42,7 @@
     if(mode==='remote')return creator('rotateClientSecret',{clientId:clientId,kind:kind});
     var data=loadDemo(),c=clientFor(data,clientId);if(!c)throw new Error('Client not found');if(kind==='room')c.roomToken=demoToken(c.company);else c.approvalCode=demoCode();saveDemo(data);return {client:clone(c),data:clone(data)};
   }
-  async function updateRoomControls(clientId,payload){if(mode==='remote')return creator('updateRoomControls',Object.assign({clientId:clientId},payload||{}));var data=loadDemo(),c=clientFor(data,clientId);if(!c)throw new Error('Client not found');if(payload.clearLock)c.approvalLockedUntil=null;if(payload.expiresAt)c.roomTokenExpiresAt=payload.expiresAt;saveDemo(data);return {client:clone(c),data:clone(data)};}
+  async function updateRoomControls(clientId,payload){if(mode==='remote')return creator('updateRoomControls',Object.assign({clientId:clientId},payload||{}));var data=loadDemo(),c=clientFor(data,clientId);if(!c)throw new Error('Client not found');if(payload.clearLock)c.approvalLockedUntil=null;if(Object.prototype.hasOwnProperty.call(payload,'expiresAt'))c.roomTokenExpiresAt=payload.expiresAt;saveDemo(data);return {client:clone(c),data:clone(data)};}
   async function assignPost(postId,clientId){
     if(mode==='remote')return creator('assignPost',{postId:postId,clientId:clientId});
     var data=loadDemo(),p=postFor(data,postId);if(!p)throw new Error('Post not found');p.clientId=clientId||null;saveDemo(data);return {post:clone(p),data:clone(data)};
