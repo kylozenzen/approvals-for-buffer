@@ -2,12 +2,12 @@
 (function(){
   var U=window.ReceiptsUtil,API=window.ReceiptsAPI,UI=window.ReceiptsUI,Auth=window.ReceiptsAuth;
   var app=document.getElementById('app');
-  var state={page:'board',data:null,session:null,reviewToken:null,room:null,bufferOrganizations:[]};
+  var state={page:'board',data:null,session:null,reviewToken:null,room:null,expandedReviewPostId:undefined,bufferOrganizations:[]};
   var WALKTHROUGH_KEY='receipts_frictionless_walkthrough_complete_v1';
   var RECEIPT_NUDGE_KEY='receipts_frictionless_receipt_nudge_v1';
 
   function getReviewToken(){var m=window.location.pathname.match(/^\/(?:review|r)\/([^/]+)/);if(m)return decodeURIComponent(m[1]);var q=new URLSearchParams(window.location.search);return q.get('review')||q.get('stamp');}
-  function render(){if(state.reviewToken){if(state.room)app.innerHTML=UI.reviewRoom(state.room,state.reviewToken);return;}if(API.getMode()==='remote'&&!state.session){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError('Your browser-based beta session ended. Refresh to start or recover your workspace.'):UI.login();return;}if(!state.data){app.innerHTML=UI.loading();return;}app.innerHTML=UI.renderCreator(state);}
+  function render(){if(state.reviewToken){if(state.room)app.innerHTML=UI.reviewRoom(state.room,state.reviewToken,state.expandedReviewPostId);return;}if(API.getMode()==='remote'&&!state.session){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError('Your browser-based beta session ended. Refresh to start or recover your workspace.'):UI.login();return;}if(!state.data){app.innerHTML=UI.loading();return;}app.innerHTML=UI.renderCreator(state);}
   function afterCreatorLoad(){
     if(!API.getConfig().frictionlessBeta)return;
     if(localStorage.getItem(WALKTHROUGH_KEY)!=='true'){U.openModal(UI.walkthrough(0));return;}
@@ -17,7 +17,7 @@
     }
   }
   async function loadCreator(){app.innerHTML=UI.loading('Loading your approval board…');try{state.data=await API.bootstrap();render();afterCreatorLoad();}catch(e){app.innerHTML=UI.error(e.message);}}
-  async function loadRoom(){app.innerHTML=UI.loading('Opening approval room…');try{state.room=await API.getReviewRoom(state.reviewToken);render();}catch(e){app.innerHTML=UI.error(e.message);}}
+  async function loadRoom(){app.innerHTML=UI.loading('Opening approval room…');try{state.room=await API.getReviewRoom(state.reviewToken);if(state.expandedReviewPostId===undefined){var firstWaiting=(state.room.posts||[]).find(function(p){return p.status==='review';});state.expandedReviewPostId=firstWaiting?firstWaiting.id:null;}render();}catch(e){app.innerHTML=UI.error(e.message);}}
   async function refresh(){if(state.reviewToken)return loadRoom();return loadCreator();}
   async function boot(){app.innerHTML=UI.loading();state.reviewToken=getReviewToken();try{if(state.reviewToken){await API.init();return loadRoom();}var auth=await Auth.init();state.session=auth.session;if(auth.mode==='remote'&&!auth.session){render();return;}await loadCreator();}catch(e){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError(e.message):UI.error(e.message);}}
   function onAuthChange(session){state.session=session;if(state.reviewToken)return;if(session)loadCreator();else{state.data=null;render();}}
@@ -124,10 +124,11 @@
 
   function reviewValues(postId){var name=document.getElementById('review-name-'+postId),body=document.getElementById('review-body-'+postId);return {name:name?name.value.trim():'Client',body:body?body.value.trim():''};}
   window.ReviewActions={
-    comment:function(token,postId){var v=reviewValues(postId);if(!v.body){U.toast('Write a comment first');return;}run(function(){return API.addReviewComment(token,postId,v.name,v.body);},'Comment added');},
-    changes:function(token,postId){var v=reviewValues(postId);if(!v.body){U.toast('Describe the requested change first');return;}run(function(){return API.requestChanges(token,postId,v.name,v.body);},'Changes requested');},
+    toggle:function(postId){state.expandedReviewPostId=state.expandedReviewPostId===postId?null:postId;render();},
+    comment:function(token,postId){var v=reviewValues(postId);if(!v.body){U.toast('Write a comment first');return;}state.expandedReviewPostId=postId;run(function(){return API.addReviewComment(token,postId,v.name,v.body);},'Comment added');},
+    changes:function(token,postId){var v=reviewValues(postId);if(!v.body){U.toast('Describe the requested change first');return;}state.expandedReviewPostId=postId;run(function(){return API.requestChanges(token,postId,v.name,v.body);},'Changes requested');},
     approveModal:function(token,postId){U.openModal(UI.approveModal(token,postId));setTimeout(function(){var el=document.getElementById('approval-code');if(el)el.focus();},50);},
-    approve:function(token,postId){var code=document.getElementById('approval-code'),c=code?code.value.trim():'';if(!/^\d{6}$/.test(c)){U.toast('Enter the six-digit owner code');return;}run(async function(){var out=await API.approvePost(token,postId,'',c);U.toast(out.emailSent===false?'Approval saved and receipt created. Email notification was not sent because email delivery is not configured.':'Approval stamped, receipt saved, and email sent.');return out;});U.closeModal();}
+    approve:function(token,postId){var code=document.getElementById('approval-code'),c=code?code.value.trim():'';if(!/^\d{6}$/.test(c)){U.toast('Enter the six-digit owner code');return;}state.expandedReviewPostId=postId;run(async function(){var out=await API.approvePost(token,postId,'',c);U.toast(out.emailSent===false?'Approval saved and receipt created. Email notification was not sent because email delivery is not configured.':'Approval stamped, receipt saved, and email sent.');return out;});U.closeModal();}
   };
 
   window.ReceiptsApp={state:state,onAuthChange:onAuthChange,refresh:refresh};
