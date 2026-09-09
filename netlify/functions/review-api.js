@@ -14,6 +14,7 @@ function mapPublicItem(row,snapshot,comments){
     caption:saved.caption||payload.caption||'',
     image:saved.image_url||payload.imageUrl||'',
     platform:saved.platform||payload.platform||'Buffer',
+    service:saved.service||payload.service||'',
     status:row.status,
     version:saved.version||row.version||1,
     changedSinceReview:Boolean(row.changed_since_review),

@@ -45,6 +45,7 @@ require.cache[dbPath]={
         caption:'Exact reviewed caption',
         image_url:'https://example.com/reviewed.png',
         platform:'LinkedIn',
+        service:'linkedin',
         version:2,
         snapshot_json:{caption:'Exact reviewed caption'}
       }];
@@ -78,6 +79,7 @@ async function main(){
   assert.equal(body.posts[0].caption,'Exact reviewed caption');
   assert.equal(body.posts[0].image,'https://example.com/reviewed.png');
   assert.equal(body.posts[0].platform,'LinkedIn');
+  assert.equal(body.posts[0].service,'linkedin');
   assert.equal(body.posts[0].version,2);
   console.log('Public review snapshot tests passed.');
 }
