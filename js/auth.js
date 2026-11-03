@@ -10,7 +10,7 @@
       return {mode:'demo',session:session};
     }
     if(!window.supabase||!window.supabase.createClient)throw new Error('Supabase client library did not load.');
-    client=window.supabase.createClient(started.config.supabaseUrl,started.config.supabaseAnonKey,{auth:{persistSession:true,detectSessionInUrl:true,autoRefreshToken:true}});
+    client=window.supabase.createClient(started.config.supabaseUrl,started.config.supabaseAnonKey,{auth:{persistSession:true,detectSessionInUrl:window.location.pathname!=='/auth/buffer/callback',autoRefreshToken:true}});
     var result=await client.auth.getSession();
     if(result.error)throw result.error;
     session=result.data.session||null;

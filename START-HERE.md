@@ -14,9 +14,9 @@ This repository is the **Buffer-only Receipts MVP**.
 1. Create a new empty GitHub repository.
 2. Unzip this package and upload the contents of this folder to the repository root.
 3. Import the repository into Netlify.
-4. Create a free Supabase project and run `supabase/migrations/001_receipts_beta.sql`, followed by `supabase/migrations/002_beta_hardening.sql`.
+4. Create a free Supabase project and run `supabase/migrations/001_receipts_beta.sql`, then `002_beta_hardening.sql`, then `003_buffer_oauth_and_notes.sql`.
 5. Copy `.env.example` values into Netlify environment variables.
-6. Testers sign in, paste their own Buffer API key in Settings, and sync their own content. The key is held only in page memory and is not saved to browser storage, Supabase, or Receipts records. `BUFFER_API_KEY` is optional as a server-side fallback.
+6. Optional: set `BUFFER_OAUTH_CLIENT_ID` (see README → Buffer connection modes) so testers can choose **Connect with Buffer** instead of pasting a key. Otherwise testers sign in, paste their own Buffer API key in Settings, and sync their own content. The key is held only in page memory and is not saved to browser storage, Supabase, or Receipts records. `BUFFER_API_KEY` is optional as a server-side fallback.
 7. Deploy, open `/app`, and sign in by magic link.
 
 The app runs as an interactive demo when Supabase is not configured, so you can inspect the interface before connecting anything.

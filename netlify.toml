@@ -11,6 +11,11 @@
   status = 200
 
 [[redirects]]
+  from = "/auth/buffer/callback"
+  to = "/app.html"
+  status = 200
+
+[[redirects]]
   from = "/review/*"
   to = "/app.html"
   status = 200

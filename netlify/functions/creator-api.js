@@ -4,6 +4,7 @@ const db=require('./_lib/supabase');
 const auth=require('./_lib/auth');
 const C=require('./_lib/crypto');
 const BufferAPI=require('./_lib/buffer');
+const BufferOAuth=require('./_lib/buffer-oauth');
 const Mail=require('./_lib/email');
 
 function q(v){return encodeURIComponent(v);}
@@ -11,7 +12,7 @@ function titleFromCaption(value){const clean=String(value||'').replace(/\s+/g,' 
 function publicBase(event){return (process.env.APP_BASE_URL||((event.headers['x-forwarded-proto']||'https')+'://'+event.headers.host)).replace(/\/$/,'');}
 function mapClient(row){let roomToken='',approvalCode='';try{roomToken=C.decrypt(row.room_token_ciphertext);}catch(e){}try{approvalCode=C.decrypt(row.approval_code_ciphertext);}catch(e){}return {id:row.id,name:row.contact_name,company:row.company,email:row.email,approvalOwner:row.approval_owner,approvalNote:row.approval_note||'',roomToken,approvalCode,color:row.color||'#cafd00',colorText:row.color_text||'#0d0f0c',initials:row.initials||'',active:row.active!==false,approvalLockedUntil:row.approval_locked_until||null,roomTokenExpiresAt:row.room_token_expires_at||null};}
 function mapItem(row){return {id:row.id,bufferId:row.buffer_post_id,clientId:row.client_id,title:row.title,caption:row.caption||'',image:row.image_url||'',platform:row.platform||'Buffer',service:row.service||'',channelId:row.channel_id||'',status:row.status||'draft',bufferStatus:row.buffer_status||'draft',dueAt:row.due_at,version:row.version||1,changedSinceReview:Boolean(row.changed_since_review),approvedBy:row.approved_by,approvedAt:row.approved_at,receiptCode:row.receipt_code,currentFingerprint:row.current_fingerprint,createdAt:row.source_created_at||row.created_at,updatedAt:row.updated_at};}
-function mapComment(row){return {id:row.id,authorType:row.author_type,authorName:row.author_name,body:row.body,kind:row.kind,createdAt:row.created_at};}
+function mapComment(row){return {id:row.id,authorType:row.author_type,authorName:row.author_name,body:row.body,kind:row.kind,source:row.source||'receipts',clientVisible:row.client_visible!==false,createdAt:row.created_at};}
 function mapReceipt(row){return {id:row.id,receiptCode:row.receipt_code,postId:row.content_item_id,clientId:row.client_id,clientCompany:row.client_company,title:row.title,platform:row.platform,approverName:row.approver_name,approvedAt:row.approved_at,version:row.version,fingerprint:row.fingerprint,snapshot:row.snapshot_json||{}};}
 async function ownItem(userId,id){return db.one('content_items','select=*&id=eq.'+q(id)+'&user_id=eq.'+q(userId));}
 async function ownClient(userId,id){return db.one('clients','select=*&id=eq.'+q(id)+'&user_id=eq.'+q(userId));}
@@ -23,7 +24,8 @@ async function bootstrap(user){
     db.select('receipts','select=*&user_id=eq.'+q(user.id)+'&order=approved_at.desc')
   ]);
   const lastSync=(items||[]).map(x=>x.last_synced_at).filter(Boolean).sort().reverse()[0]||null;
-  return {profile:{id:user.id,email:user.email||'',name:(profiles[0]&&profiles[0].display_name)||'',bufferOrganizationId:(profiles[0]&&profiles[0].buffer_organization_id)||''},clients:(clients||[]).map(mapClient),posts:(items||[]).map(mapItem),receipts:(receipts||[]).map(mapReceipt),lastSync};
+  const buffer=await BufferOAuth.connectionStatus(user.id);
+  return {profile:{id:user.id,email:user.email||'',name:(profiles[0]&&profiles[0].display_name)||'',bufferOrganizationId:(profiles[0]&&profiles[0].buffer_organization_id)||''},buffer,clients:(clients||[]).map(mapClient),posts:(items||[]).map(mapItem),receipts:(receipts||[]).map(mapReceipt),lastSync};
 }
 async function createClient(user,p){
   if(!p.company||!p.email||!(p.approvalOwner||p.name))throw Object.assign(new Error('Company, owner, and email are required.'),{statusCode:400});
@@ -62,10 +64,97 @@ async function addCreatorComment(user,p){const item=await ownItem(user.id,p.post
 async function postDetail(user,p){const item=await ownItem(user.id,p.postId);if(!item)throw Object.assign(new Error('Post not found.'),{statusCode:404});const [client,comments]=await Promise.all([item.client_id?ownClient(user.id,item.client_id):Promise.resolve(null),db.select('comments','select=*&content_item_id=eq.'+q(item.id)+'&order=created_at.asc')]);return {post:mapItem(item),client:client?mapClient(client):null,comments:(comments||[]).map(mapComment)};}
 function snapshotFromBuffer(post){return {bufferPostId:post.bufferId,caption:post.caption||'',imageUrl:post.image||'',assets:Array.isArray(post.assets)?post.assets:[],platform:post.platform||'Buffer',service:post.service||'',channelId:post.channelId||'',bufferStatus:post.bufferStatus||'draft',dueAt:post.dueAt||null};}
 async function selectBufferOrganization(user,p){if(!String(p.organizationId||'').trim())throw Object.assign(new Error('Choose a Buffer organization.'),{statusCode:400});await db.update('profiles','id=eq.'+q(user.id),{buffer_organization_id:String(p.organizationId).trim()});return {ok:true};}
-async function syncBuffer(user,event){const token=(event.headers['x-buffer-token']||event.headers['X-Buffer-Token']||process.env.BUFFER_API_KEY||process.env.BUFFER_TOKEN||'').trim();const profile=await db.one('profiles','select=buffer_organization_id&id=eq.'+q(user.id));const pulled=await BufferAPI.getPosts(token,profile&&profile.buffer_organization_id);let added=0,updated=0,changed=0;for(const post of pulled.posts){const snap=snapshotFromBuffer(post),fp=C.fingerprint(snap);const existing=await db.one('content_items','select=*&user_id=eq.'+q(user.id)+'&buffer_post_id=eq.'+q(post.bufferId));if(!existing){const inserted=await db.insert('content_items',{user_id:user.id,buffer_post_id:post.bufferId,title:titleFromCaption(post.caption),caption:post.caption||'',image_url:post.image||'',platform:post.platform||'Buffer',service:post.service||'',channel_id:post.channelId||'',buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,status:'draft',version:1,current_fingerprint:fp,source_created_at:post.createdAt||new Date().toISOString(),last_synced_at:new Date().toISOString()});const item=inserted[0];const snapshots=await db.insert('content_snapshots',{content_item_id:item.id,user_id:user.id,version:1,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});await db.update('content_items','id=eq.'+q(item.id),{latest_snapshot_id:snapshots[0].id});added++;continue;}if(existing.current_fingerprint!==fp){const version=(existing.version||1)+1;const snapshots=await db.insert('content_snapshots',{content_item_id:existing.id,user_id:user.id,version,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});const hadReview=Boolean(existing.review_snapshot_id);await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{title:titleFromCaption(post.caption),caption:post.caption||'',image_url:post.image||'',platform:post.platform||'Buffer',service:post.service||'',channel_id:post.channelId||'',buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,version,current_fingerprint:fp,latest_snapshot_id:snapshots[0].id,status:hadReview?'draft':existing.status,changed_since_review:hadReview,approved_by:null,approved_at:null,receipt_code:null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});changed++;updated++;}else{await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});updated++;}}
-  return {added,updated,changed,organization:pulled.organization,organizationCount:pulled.organizationCount||0,organizations:pulled.organizations||[],truncated:Boolean(pulled.truncated)};
+// Which Buffer token to use, in priority order:
+// 1. a key pasted in this browser session (x-buffer-token), 2. the creator's saved
+// Buffer OAuth connection, 3. a server-wide BUFFER_API_KEY fallback.
+async function resolveBufferToken(user,event){
+  const pasted=(event.headers['x-buffer-token']||event.headers['X-Buffer-Token']||'').trim();
+  if(pasted)return {token:pasted,source:'session_key'};
+  const oauthToken=await BufferOAuth.accessToken(user.id).catch(e=>{if(e.reconnect)throw e;console.warn('[Receipts] Buffer connection lookup failed:',e.message);return '';});
+  if(oauthToken)return {token:oauthToken,source:'oauth'};
+  return {token:(process.env.BUFFER_API_KEY||process.env.BUFFER_TOKEN||'').trim(),source:'server_key'};
 }
+async function pullBufferPosts(user,event,orgId){
+  const resolved=await resolveBufferToken(user,event);
+  try{return await BufferAPI.getPosts(resolved.token,orgId);}
+  catch(e){
+    // An OAuth access token can be revoked or expire early: refresh once and retry.
+    if(resolved.source!=='oauth'||e.bufferStatus!==401)throw e;
+    return BufferAPI.getPosts(await BufferOAuth.accessToken(user.id,true),orgId);
+  }
+}
+function noteRow(user,target,note){
+  return {content_item_id:target.itemId,user_id:user.id,snapshot_id:target.snapshotId||null,author_type:'buffer',author_name:String(note.authorName||'Buffer teammate').slice(0,80),body:String(note.text).slice(0,4000),kind:'note',source:'buffer',buffer_note_id:note.id,client_visible:false,external_updated_at:note.updatedAt||null,created_at:note.createdAt||new Date().toISOString()};
+}
+// Mirrors each synced post's Buffer notes into its comment thread: new notes are
+// added (hidden from the client room), edited notes are updated, deleted notes removed.
+async function syncNotes(user,pulled,targets){
+  const out={notesAdded:0,notesUpdated:0,notesRemoved:0,notesAvailable:Boolean(pulled.notesAvailable)};
+  if(!pulled.notesAvailable||!targets.length)return out;
+  let existing;
+  try{existing=await db.select('comments','select=id,content_item_id,buffer_note_id,body,author_name,external_updated_at&source=eq.buffer&user_id=eq.'+q(user.id)+'&content_item_id=in.('+targets.map(t=>t.itemId).join(',')+')');}
+  catch(e){console.warn('[Receipts] Skipping Buffer notes (run migration 003):',e.message);out.notesAvailable=false;out.notesNeedMigration=true;return out;}
+  const byItem={};
+  (existing||[]).forEach(row=>{(byItem[row.content_item_id]||(byItem[row.content_item_id]={}))[row.buffer_note_id]=row;});
+  const inserts=[],removals=[];
+  for(const target of targets){
+    const saved=byItem[target.itemId]||{},current=new Set();
+    for(const note of target.notes){
+      current.add(note.id);
+      const row=saved[note.id];
+      if(!row){inserts.push(noteRow(user,target,note));continue;}
+      const body=String(note.text).slice(0,4000);
+      if(row.body!==body||row.author_name!==note.authorName){
+        await db.update('comments','id=eq.'+q(row.id)+'&user_id=eq.'+q(user.id),{body,author_name:String(note.authorName||'Buffer teammate').slice(0,80),external_updated_at:note.updatedAt||null});
+        out.notesUpdated++;
+      }
+    }
+    Object.keys(saved).forEach(noteId=>{if(!current.has(noteId))removals.push(saved[noteId].id);});
+  }
+  if(inserts.length){await db.insert('comments',inserts);out.notesAdded=inserts.length;}
+  if(removals.length){await db.remove('comments','user_id=eq.'+q(user.id)+'&source=eq.buffer&id=in.('+removals.join(',')+')');out.notesRemoved=removals.length;}
+  return out;
+}
+async function syncBuffer(user,event){
+  const profile=await db.one('profiles','select=buffer_organization_id&id=eq.'+q(user.id));
+  const pulled=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id);
+  let added=0,updated=0,changed=0;const noteTargets=[];
+  for(const post of pulled.posts){
+    const snap=snapshotFromBuffer(post),fp=C.fingerprint(snap);
+    const existing=await db.one('content_items','select=*&user_id=eq.'+q(user.id)+'&buffer_post_id=eq.'+q(post.bufferId));
+    if(!existing){
+      const inserted=await db.insert('content_items',{user_id:user.id,buffer_post_id:post.bufferId,title:titleFromCaption(post.caption),caption:post.caption||'',image_url:post.image||'',platform:post.platform||'Buffer',service:post.service||'',channel_id:post.channelId||'',buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,status:'draft',version:1,current_fingerprint:fp,source_created_at:post.createdAt||new Date().toISOString(),last_synced_at:new Date().toISOString()});
+      const item=inserted[0];
+      const snapshots=await db.insert('content_snapshots',{content_item_id:item.id,user_id:user.id,version:1,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});
+      await db.update('content_items','id=eq.'+q(item.id),{latest_snapshot_id:snapshots[0].id});
+      noteTargets.push({itemId:item.id,snapshotId:snapshots[0].id,notes:post.notes||[]});
+      added++;continue;
+    }
+    if(existing.current_fingerprint!==fp){
+      const version=(existing.version||1)+1;
+      const snapshots=await db.insert('content_snapshots',{content_item_id:existing.id,user_id:user.id,version,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});
+      const hadReview=Boolean(existing.review_snapshot_id);
+      await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{title:titleFromCaption(post.caption),caption:post.caption||'',image_url:post.image||'',platform:post.platform||'Buffer',service:post.service||'',channel_id:post.channelId||'',buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,version,current_fingerprint:fp,latest_snapshot_id:snapshots[0].id,status:hadReview?'draft':existing.status,changed_since_review:hadReview,approved_by:null,approved_at:null,receipt_code:null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});
+      noteTargets.push({itemId:existing.id,snapshotId:snapshots[0].id,notes:post.notes||[]});
+      changed++;updated++;
+    }else{
+      await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});
+      noteTargets.push({itemId:existing.id,snapshotId:existing.review_snapshot_id||existing.latest_snapshot_id,notes:post.notes||[]});
+      updated++;
+    }
+  }
+  const notes=await syncNotes(user,pulled,noteTargets);
+  return Object.assign({added,updated,changed,organization:pulled.organization,organizationCount:pulled.organizationCount||0,organizations:pulled.organizations||[],truncated:Boolean(pulled.truncated)},notes);
+}
+async function setNoteVisibility(user,p){
+  const row=await db.one('comments','select=*&id=eq.'+q(p.commentId)+'&user_id=eq.'+q(user.id)+'&source=eq.buffer');
+  if(!row)throw Object.assign(new Error('Buffer note not found.'),{statusCode:404});
+  const rows=await db.update('comments','id=eq.'+q(row.id)+'&user_id=eq.'+q(user.id),{client_visible:Boolean(p.visible)});
+  return {comment:mapComment(rows[0])};
+}
+async function connectBuffer(user,p,event){return {buffer:await BufferOAuth.connect(user,p,event)};}
+async function disconnectBuffer(user){return {buffer:await BufferOAuth.disconnect(user)};}
 async function resendApprovalEmail(user,p){const receipt=await db.one('receipts','select=*&id=eq.'+q(p.receiptId)+'&user_id=eq.'+q(user.id));if(!receipt)throw Object.assign(new Error('Receipt not found.'),{statusCode:404});const client=await ownClient(user.id,receipt.client_id);if(!client)throw Object.assign(new Error('Client not found.'),{statusCode:404});return Mail.sendEmail({to:Mail.uniqueRecipients([client.email,user.email]),subject:receipt.receipt_code+' — '+receipt.title+' approved',html:'<p>'+receipt.approver_name+' approved '+receipt.title+' for '+client.company+'. Receipt: '+receipt.receipt_code+'.</p>'});}
 async function inviteClient(user,p,event){const client=await ownClient(user.id,p.clientId);if(!client)throw Object.assign(new Error('Client not found.'),{statusCode:404});const room=C.decrypt(client.room_token_ciphertext),code=C.decrypt(client.approval_code_ciphertext),url=publicBase(event)+'/review/'+encodeURIComponent(room);const result=await Mail.sendEmail({to:client.email,subject:'Your '+client.company+' approval room',html:'<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto"><h1>Content is ready for review</h1><p>Open the approval room to comment, request changes, or stamp final approval.</p><p><a href="'+url+'" style="display:inline-block;background:#cafd00;color:#354600;padding:12px 18px;border-radius:999px;text-decoration:none;font-weight:700">Open approval room</a></p><p><strong>Owner code:</strong> '+code+'</p><p style="color:#777;font-size:12px">The team can comment. The code holder can grant final approval.</p></div>'});return Object.assign(result,{preview:'Approval room: '+url+'\nOwner code: '+code});}
 
-exports.handler=async function(event){const opt=H.options(event);if(opt)return opt;if(!H.originAllowed(event))return H.json(403,{error:'Origin is not allowed.'});if(event.httpMethod!=='POST')return H.json(405,{error:'POST required.'});try{const user=await auth.userFromEvent(event);const body=H.parse(event),action=body.action,p=body.payload||{};let out;if(action==='bootstrap')out=await bootstrap(user);else if(action==='createClient')out=await createClient(user,p);else if(action==='rotateClientSecret')out=await rotateClientSecret(user,p);else if(action==='updateRoomControls')out=await updateRoomControls(user,p);else if(action==='assignPost')out=await assignPost(user,p);else if(action==='sendForReview')out=await sendForReview(user,p);else if(action==='assignAndSendForReview')out=await assignAndSendForReview(user,p);else if(action==='addCreatorComment')out=await addCreatorComment(user,p);else if(action==='postDetail')out=await postDetail(user,p);else if(action==='syncBuffer')out=await syncBuffer(user,event);else if(action==='selectBufferOrganization')out=await selectBufferOrganization(user,p);else if(action==='inviteClient')out=await inviteClient(user,p,event);else if(action==='resendApprovalEmail')out=await resendApprovalEmail(user,p);else throw Object.assign(new Error('Unknown creator action.'),{statusCode:400});return H.json(200,out);}catch(e){return H.fail(e);}};
+exports.handler=async function(event){const opt=H.options(event);if(opt)return opt;if(!H.originAllowed(event))return H.json(403,{error:'Origin is not allowed.'});if(event.httpMethod!=='POST')return H.json(405,{error:'POST required.'});try{const user=await auth.userFromEvent(event);const body=H.parse(event),action=body.action,p=body.payload||{};let out;if(action==='bootstrap')out=await bootstrap(user);else if(action==='createClient')out=await createClient(user,p);else if(action==='rotateClientSecret')out=await rotateClientSecret(user,p);else if(action==='updateRoomControls')out=await updateRoomControls(user,p);else if(action==='assignPost')out=await assignPost(user,p);else if(action==='sendForReview')out=await sendForReview(user,p);else if(action==='assignAndSendForReview')out=await assignAndSendForReview(user,p);else if(action==='addCreatorComment')out=await addCreatorComment(user,p);else if(action==='postDetail')out=await postDetail(user,p);else if(action==='syncBuffer')out=await syncBuffer(user,event);else if(action==='connectBuffer')out=await connectBuffer(user,p,event);else if(action==='disconnectBuffer')out=await disconnectBuffer(user);else if(action==='setNoteVisibility')out=await setNoteVisibility(user,p);else if(action==='selectBufferOrganization')out=await selectBufferOrganization(user,p);else if(action==='inviteClient')out=await inviteClient(user,p,event);else if(action==='resendApprovalEmail')out=await resendApprovalEmail(user,p);else throw Object.assign(new Error('Unknown creator action.'),{statusCode:400});return H.json(200,out);}catch(e){return H.fail(e);}};

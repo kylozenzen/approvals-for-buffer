@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 — Buffer notes + Connect with Buffer
+
+- Buffer notes on each synced post now appear in its Receipts thread, tagged "Buffer note". Edits and deletions in Buffer carry over on the next sync.
+- Buffer notes are hidden from client rooms by default; creators can share or hide each one.
+- Notes never change the snapshot fingerprint, so they don't reset approvals.
+- Added "Connect with Buffer" (OAuth + PKCE). Tokens are encrypted server-side in Supabase and refreshed automatically; Settings shows connected / reconnect / disconnect states.
+- Pasting an API key still works and takes priority for the current tab.
+- New migration `003_buffer_oauth_and_notes.sql`; new env vars `BUFFER_OAUTH_CLIENT_ID` (+ optional `BUFFER_OAUTH_CLIENT_SECRET`, `BUFFER_OAUTH_SCOPE`).
+
 ## 1.1.0 — Cohort beta loop
 
 - Added a guided Buffer → client → review flow on the board.
