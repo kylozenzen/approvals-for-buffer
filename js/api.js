@@ -4,7 +4,7 @@
   var config={backendConfigured:false,appBaseUrl:window.location.origin};
   var session=null;
   var mode='demo';
-  var DEMO_KEY='receipts_buffer_beta_demo_v1';
+  var DEMO_KEY='receipts_buffer_beta_demo_v2';
   var ENABLE_BYO_BUFFER_KEY=true;
   var bufferToken='';
 
@@ -70,6 +70,12 @@
     if(mode==='remote')return creator('syncBuffer',{},ENABLE_BYO_BUFFER_KEY&&token?{'x-buffer-token':token}:{});
     var data=loadDemo();data.lastSync=new Date().toISOString();var unassigned=data.posts.find(function(p){return p.bufferId==='buf_demo_new';});if(!unassigned){data.posts.unshift({id:U.id('post'),bufferId:'buf_demo_new',clientId:null,title:'Fresh Buffer draft',caption:'A newly synced Buffer draft appears here, ready to assign to a client.',image:'',platform:'LinkedIn',service:'linkedin',status:'draft',bufferStatus:'draft',version:1,changedSinceReview:false,createdAt:new Date().toISOString(),comments:[]});}saveDemo(data);await new Promise(function(r){setTimeout(r,450);});return {data:clone(data),added:unassigned?0:1,updated:data.posts.length};
   }
+  async function connectBuffer(payload){if(mode==='remote')return creator('connectBuffer',payload);throw new Error('Buffer sign-in needs the shared beta backend. The demo uses sample posts.');}
+  async function disconnectBuffer(){if(mode==='remote')return creator('disconnectBuffer');return {buffer:{connected:false}};}
+  async function setNoteVisibility(commentId,visible){
+    if(mode==='remote')return creator('setNoteVisibility',{commentId:commentId,visible:Boolean(visible)});
+    var data=loadDemo(),found=null;(data.posts||[]).forEach(function(p){(p.comments||[]).forEach(function(c){if(c.id===commentId)found=c;});});if(!found||found.source!=='buffer')throw new Error('Buffer note not found');found.clientVisible=Boolean(visible);saveDemo(data);return {comment:clone(found)};
+  }
   async function resendApprovalEmail(receiptId){if(mode==='remote')return creator('resendApprovalEmail',{receiptId:receiptId});return {sent:false};}
   async function inviteClient(clientId){
     if(mode==='remote')return creator('inviteClient',{clientId:clientId});
@@ -81,7 +87,7 @@
   }
   async function getReviewRoom(token){
     if(mode==='remote')return review('getRoom',token);
-    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;});if(!c)throw new Error('This approval room was not found.');var posts=(data.posts||[]).filter(function(p){return p.clientId===c.id&&p.status!=='draft';});return {client:clone(c),posts:clone(posts),demo:true};
+    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;});if(!c)throw new Error('This approval room was not found.');var posts=clone((data.posts||[]).filter(function(p){return p.clientId===c.id&&p.status!=='draft';}));posts.forEach(function(p){p.comments=(p.comments||[]).filter(function(x){return x.clientVisible!==false;});});return {client:clone(c),posts:posts,demo:true};
   }
   async function addReviewComment(token,postId,name,body){
     if(mode==='remote')return review('addComment',token,{postId:postId,name:name,body:body});
@@ -102,5 +108,5 @@
   function saveBufferToken(token){if(ENABLE_BYO_BUFFER_KEY)bufferToken=String(token||'');}
   function byoBufferKeyEnabled(){return ENABLE_BYO_BUFFER_KEY;}
 
-  window.ReceiptsAPI={init:init,setSession:setSession,bootstrap:bootstrap,createClient:createClient,rotateClient:rotateClient,updateRoomControls:updateRoomControls,assignPost:assignPost,sendForReview:sendForReview,assignAndSendForReview:assignAndSendForReview,addCreatorComment:addCreatorComment,selectBufferOrganization:selectBufferOrganization,syncBuffer:syncBuffer,inviteClient:inviteClient,resendApprovalEmail:resendApprovalEmail,getPostDetail:getPostDetail,getReviewRoom:getReviewRoom,addReviewComment:addReviewComment,requestChanges:requestChanges,approvePost:approvePost,reset:reset,getMode:getMode,getConfig:getConfig,getBufferToken:getBufferToken,saveBufferToken:saveBufferToken,byoBufferKeyEnabled:byoBufferKeyEnabled};
+  window.ReceiptsAPI={init:init,setSession:setSession,bootstrap:bootstrap,createClient:createClient,rotateClient:rotateClient,updateRoomControls:updateRoomControls,assignPost:assignPost,sendForReview:sendForReview,assignAndSendForReview:assignAndSendForReview,addCreatorComment:addCreatorComment,selectBufferOrganization:selectBufferOrganization,syncBuffer:syncBuffer,connectBuffer:connectBuffer,disconnectBuffer:disconnectBuffer,setNoteVisibility:setNoteVisibility,inviteClient:inviteClient,resendApprovalEmail:resendApprovalEmail,getPostDetail:getPostDetail,getReviewRoom:getReviewRoom,addReviewComment:addReviewComment,requestChanges:requestChanges,approvePost:approvePost,reset:reset,getMode:getMode,getConfig:getConfig,getBufferToken:getBufferToken,saveBufferToken:saveBufferToken,byoBufferKeyEnabled:byoBufferKeyEnabled};
 })();

@@ -19,9 +19,26 @@
   async function loadCreator(){app.innerHTML=UI.loading('Loading your approval board…');try{state.data=await API.bootstrap();render();afterCreatorLoad();}catch(e){app.innerHTML=UI.error(e.message);}}
   async function loadRoom(){app.innerHTML=UI.loading('Opening approval room…');try{state.room=await API.getReviewRoom(state.reviewToken);if(state.expandedReviewPostId===undefined){var firstWaiting=(state.room.posts||[]).find(function(p){return p.status==='review';});state.expandedReviewPostId=firstWaiting?firstWaiting.id:null;}render();}catch(e){app.innerHTML=UI.error(e.message);}}
   async function refresh(){if(state.reviewToken)return loadRoom();return loadCreator();}
-  async function boot(){app.innerHTML=UI.loading();state.reviewToken=getReviewToken();try{if(state.reviewToken){await API.init();return loadRoom();}var auth=await Auth.init();state.session=auth.session;if(auth.mode==='remote'&&!auth.session){render();return;}await loadCreator();}catch(e){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError(e.message):UI.error(e.message);}}
+  async function boot(){app.innerHTML=UI.loading();state.reviewToken=getReviewToken();try{if(state.reviewToken){await API.init();return loadRoom();}var auth=await Auth.init();state.session=auth.session;if(auth.mode==='remote'&&!auth.session){render();return;}if(isBufferCallback())return finishBufferConnect();await loadCreator();}catch(e){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError(e.message):UI.error(e.message);}}
   function onAuthChange(session){state.session=session;if(state.reviewToken)return;if(session)loadCreator();else{state.data=null;render();}}
   async function run(task,success){try{await task();if(success)U.toast(success);await refresh();}catch(e){U.toast(e.message||'Something went wrong');}}
+  var BUFFER_OAUTH_PREFIX='receipts',BUFFER_CALLBACK_PATH='/auth/buffer/callback';
+  function isBufferCallback(){return window.location.pathname===BUFFER_CALLBACK_PATH;}
+  function bufferConnected(){return Boolean(state.data&&state.data.buffer&&state.data.buffer.connected&&!state.data.buffer.needsReconnect);}
+  async function finishBufferConnect(){
+    app.innerHTML=UI.loading('Finishing your Buffer connection…');
+    var result;
+    try{
+      if(!window.BufferOAuth)throw new Error('Buffer sign-in did not load. Refresh and try again.');
+      result=await window.BufferOAuth.handleCallback({prefix:BUFFER_OAUTH_PREFIX,clientId:API.getConfig().bufferOAuthClientId,exchange:function(payload){return API.connectBuffer(payload);}});
+    }catch(e){result={ok:false,message:e.message};}
+    window.history.replaceState(null,'','/app');
+    state.page='settings';
+    await loadCreator();
+    if(!result.ok){U.toast(result.reason==='cancelled'?'Buffer connection cancelled':(result.message||'Buffer connection failed'));return;}
+    U.toast('Buffer connected');
+    await performSync();
+  }
   async function performSync(options){
     options=options||{};
     try{
@@ -30,22 +47,33 @@
       state.bufferOrganizations=out.organizations||[];
       await refresh();
       var total=(out.added||0)+(out.updated||0);
-      U.toast(total?'Buffer synced · '+total+' post'+(total===1?'':'s')+' checked':'Buffer synced · no active posts found');
+      var noteCount=(out.notesAdded||0)+(out.notesUpdated||0);
+      U.toast((total?'Buffer synced · '+total+' post'+(total===1?'':'s')+' checked':'Buffer synced · no active posts found')+(noteCount?' · '+noteCount+' Buffer note'+(noteCount===1?'':'s')+' pulled in':''));
+      if(out.notesNeedMigration)U.toast('Buffer notes need Supabase migration 003 before they can sync.');
       if(out.truncated)U.toast('Buffer returned the first 50 active posts.');
       var selected=state.data&&state.data.profile&&state.data.profile.bufferOrganizationId;
       if(out.organizationCount>1&&!selected&&!options.deferOrganization)U.openModal(UI.organizationModal(state.bufferOrganizations,out.organization&&out.organization.id));
       return out;
-    }catch(e){if(options.throwOnError)throw e;U.toast(e.message||'Buffer sync failed');return null;}
+    }catch(e){if(options.throwOnError)throw e;U.toast(e.message||'Buffer sync failed');if(/reconnect/i.test(e.message||''))refresh();return null;}
   }
 
   window.ReceiptsActions={
     go:function(page){state.page=page;render();window.scrollTo(0,0);},
     openSync:function(){
       var hasServerKey=Boolean(API.getConfig().bufferKeyConfigured);
-      if(API.getMode()==='demo'||API.getBufferToken()||hasServerKey){performSync();return;}
+      if(API.getMode()==='demo'||API.getBufferToken()||bufferConnected()||hasServerKey){performSync();return;}
       U.openModal(UI.syncModal());
     },
     sync:function(){this.openSync();},
+    connectBuffer:async function(){
+      var cfg=API.getConfig();
+      if(API.getMode()!=='remote'){U.toast('Buffer sign-in works once the shared beta backend is configured.');return;}
+      if(!cfg.bufferOAuthConfigured||!window.BufferOAuth){U.toast('Buffer sign-in is not configured yet. Paste a Buffer API key instead.');return;}
+      try{await window.BufferOAuth.startAuthorization({prefix:BUFFER_OAUTH_PREFIX,clientId:cfg.bufferOAuthClientId,redirectUri:window.location.origin+BUFFER_CALLBACK_PATH,scope:cfg.bufferOAuthScope||'posts:read posts:write account:read offline_access',returnTo:'/app'});}
+      catch(e){U.toast(e.message||'Could not start Buffer sign-in');}
+    },
+    disconnectBuffer:function(){if(!window.confirm('Disconnect Buffer? Receipts will stop syncing until you connect again. Existing posts and receipts stay.'))return;run(function(){return API.disconnectBuffer();},'Buffer disconnected');},
+    toggleNote:async function(commentId,visible,postId){try{await API.setNoteVisibility(commentId,visible);U.toast(visible?'Note shared in the client room':'Note hidden from the client room');var detail=await API.getPostDetail(postId);U.openModal(UI.postModal(detail,state.data));}catch(e){U.toast(e.message||'Could not update that note');}},
     syncFromModal:async function(){
       var el=document.getElementById('sync-buffer-token'),error=document.getElementById('sync-error'),button=document.getElementById('sync-connect-button');
       var rawToken=el?el.value:'',token=rawToken.trim(),buttonLabel=button?button.innerHTML:'';
