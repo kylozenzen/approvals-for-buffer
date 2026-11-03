@@ -35,7 +35,8 @@ async function roomPayload(client){
     snapshotIds.length?db.select('content_snapshots','select=*&id=in.('+snapshotIds.join(',')+')'):Promise.resolve([])
   ]);
   const grouped={},bySnapshot={};
-  comments.forEach(x=>{(grouped[x.content_item_id]||(grouped[x.content_item_id]=[])).push(mapComment(x));});
+  // Buffer notes are internal unless the creator shared them (client_visible=true).
+  comments.filter(x=>x.client_visible!==false).forEach(x=>{(grouped[x.content_item_id]||(grouped[x.content_item_id]=[])).push(mapComment(x));});
   snapshots.forEach(x=>{bySnapshot[x.id]=x;});
   return {
     client:{id:client.id,company:client.company,approvalOwner:client.approval_owner,approvalNote:client.approval_note||'',color:client.color||'#cafd00',initials:client.initials||''},
