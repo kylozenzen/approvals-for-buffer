@@ -12,7 +12,8 @@ Supabase is used only for the workflow Buffer does not own: client records, publ
 
 ## Included
 
-- Read-only Buffer sync for `draft`, `needs_approval`, and `scheduled` posts
+- Transient paginated Buffer draft picker that saves only a selected unscheduled draft
+- Background refresh of tracked posts without bulk persistence
 - Buffer media thumbnails/source references when the API returns assets
 - Client assignment
 - One stable no-login approval room per client
@@ -53,9 +54,10 @@ Create a Supabase project and run the migrations in order:
 supabase/migrations/001_receipts_beta.sql
 supabase/migrations/002_beta_hardening.sql
 supabase/migrations/003_buffer_oauth_and_notes.sql
+supabase/migrations/004_beta_capacity_selective_import.sql
 ```
 
-Already running 001 and 002? Just run 003 — it is safe to run more than once.
+Run migration 004 after 001–003 and BEFORE running this application branch. Existing over-limit content remains untouched until explicitly archived.
 
 Enable Email/Magic Link authentication. Add your production Netlify URL and `https://YOUR-SITE.netlify.app/app` to Supabase Auth redirect URLs.
 
@@ -146,3 +148,22 @@ If Buffer returns different content during a later sync, Receipts creates a new 
 - No deals, invoices, CRM, or analytics suite
 
 Those are future decisions only after the approval loop proves useful.
+
+## Beta capacity, archiving, and verification (migration 004)
+
+Each creator has at most three active client rooms, and each room has one active imported Buffer post. Every active status including approved consumes the slot. Archive a post to free its slot; snapshots, comments and receipts remain. Archiving a room revokes public access and archives its active posts. Neither action changes or deletes Buffer content.
+
+Browse and pagination are transient; import writes exactly one selected unscheduled draft and its snapshot in a transaction. Background refresh updates tracked posts only. Database triggers use transaction-scoped advisory locks, and the import is an atomic Postgres RPC. Legacy over-limit content is NOT deleted or silently archived. Review the room labels, archive excess posts, then archive surplus rooms before making new ones.
+
+**Mocked checks:** Run npm test (including scripts/test-beta-capacity.js). These cover demo limits, browse without persistence, imports, archives, historical receipts, and the existing approval integrity suite.
+
+**Database-backed verification still required in isolated Supabase (migration 004 applied):**
+
+1. Starting from two rooms, race two inserts for a third active room. Exactly one must succeed; the other must receive a quota error.
+2. Race two imports of distinct drafts into one empty room. Exactly one must commit, with one initial snapshot; verify unauthorized client IDs fail.
+3. Seed an existing workspace with four rooms and another with two active posts in a room before migration. Applying 004 must preserve all rows; capacity-increasing writes must fail while archive/review works.
+4. Archive an approved post and its room. Verify comments, all snapshot versions and receipts persist, public room calls reject the old token, and the Buffer source remains unchanged.
+5. Browse multiple pages and run background sync. Confirm never-selected posts and their snapshots are absent; changes to already tracked posts still create snapshots and invalidate in-flight approvals.
+6. Verify real Buffer connection, pagination beyond fifty results, note scopes, owner-code approval and cross-creator isolation.
+
+These steps are pending live verification, not completed database-backed test results.
