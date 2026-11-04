@@ -67,7 +67,7 @@
     if(syncing)return null;
     syncing=true;
     try{
-      if(!options.quiet)U.toast('Syncing Buffer…');
+      if(!options.quiet)U.toast('Refreshing tracked Buffer posts…');
       var out=await API.syncBuffer(API.getBufferToken());
       lastSyncAt=Date.now();
       state.bufferOrganizations=out.organizations||[];
@@ -75,7 +75,7 @@
       var total=(out.added||0)+(out.updated||0);
       var noteCount=(out.notesAdded||0)+(out.notesUpdated||0);
       if(!options.quiet)U.toast((total?'Buffer synced · '+total+' post'+(total===1?'':'s')+' checked':'Buffer synced · no active posts found')+(noteCount?' · '+noteCount+' Buffer note'+(noteCount===1?'':'s')+' pulled in':''));
-      else if(out.added||noteCount)U.toast((out.added?out.added+' new Buffer post'+(out.added===1?'':'s'):'')+(out.added&&noteCount?' · ':'')+(noteCount?noteCount+' Buffer note'+(noteCount===1?'':'s')+' pulled in':''));
+      else if(noteCount)U.toast(noteCount+' Buffer notes updated');
       noteMessages(out,options.quiet);
       if(out.truncated&&!options.quiet)U.toast('Buffer returned the first 50 active posts.');
       var selected=state.data&&state.data.profile&&state.data.profile.bufferOrganizationId;
@@ -138,10 +138,15 @@
       U.closeModal();
       try{await API.selectBufferOrganization(organizationId);await performSync();}catch(e){U.toast(e.message||'Could not select that Buffer organization');}
     },
-    newClient:function(){U.openModal(UI.newClientModal());},
-    createClient:function(){var company=document.getElementById('new-company').value.trim(),owner=document.getElementById('new-owner').value.trim(),email=document.getElementById('new-email').value.trim();if(!company||!owner||!email){U.toast('Company, owner, and email are required');return;}var payload={company:company,name:owner,approvalOwner:owner,email:email,approvalNote:document.getElementById('new-note').value.trim(),color:document.getElementById('new-color').value};run(function(){return API.createClient(payload);},'Client room created');U.closeModal();},
+    openPicker:async function(clientId){this.pickerClientId=clientId||null;try{var out=await API.bufferCandidates();this.pickerPage=null;U.openModal(UI.pickerModal(out,state.data,this.pickerClientId,null));}catch(e){U.toast(e.message||'Could not browse Buffer drafts');}},
+    nextDrafts:async function(after){try{var out=await API.bufferCandidates(after);this.pickerPage=after;U.openModal(UI.pickerModal(out,state.data,this.pickerClientId,after));}catch(e){U.toast(e.message||'Could not load the next drafts');}},
+    importDraft:async function(bufferId,after){var select=document.getElementById('picker-room'),clientId=select&&select.value;if(!clientId){U.toast('Choose a client room first');return;}try{await API.importSelected(clientId,bufferId,after);U.closeModal();await refresh();U.toast('Selected Buffer draft imported');}catch(e){U.toast(e.message||'Could not import that draft');}},
+    archivePost:async function(id){if(!window.confirm('Archive this post in Receipts? This frees the room slot but keeps all snapshots, comments, and approval receipts. Nothing is deleted from Buffer.'))return;try{await API.archivePost(id);U.closeModal();await refresh();U.toast('Post archived; its history is preserved');}catch(e){U.toast(e.message);}},
+    archiveRoom:async function(id){if(!window.confirm('Archive this client room? Its public link stops working immediately and its active post is archived. All snapshots, comments, and receipts stay saved. Nothing is deleted from Buffer.'))return;try{await API.archiveClient(id);await refresh();U.toast('Room archived and public access revoked');}catch(e){U.toast(e.message);}},
+    newClient:function(){if(state.data&&state.data.capacity&&state.data.capacity.activeRooms>=3){U.toast('Three rooms in use. Archive a room before creating another.');return;}U.openModal(UI.newClientModal());},
+    createClient:async function(){var company=document.getElementById('new-company').value.trim(),owner=document.getElementById('new-owner').value.trim(),email=document.getElementById('new-email').value.trim();if(!company||!owner||!email){U.toast('Company, owner, and email are required');return;}var payload={company:company,name:owner,approvalOwner:owner,email:email,approvalNote:document.getElementById('new-note').value.trim(),color:document.getElementById('new-color').value};try{await API.createClient(payload);U.closeModal();await refresh();U.toast('Client room created');}catch(e){U.toast(e.message||'Room limit reached. Archive a room first.');}},
     openPost:async function(id){try{var detail=await API.getPostDetail(id);U.openModal(UI.postModal(detail,state.data));var n=detail.notes||{};if(n.added)U.toast(n.added+' new Buffer note'+(n.added===1?'':'s')+' on this post');if(n.needScope||n.error||n.pushError||n.pushed||n.noToken)noteMessages({notesNeedScope:n.needScope,notesError:n.error,notesPushError:n.pushError,notesPushed:n.pushed,notesNoToken:n.noToken},false);}catch(e){U.toast(e.message);}},
-    assign:function(postId,clientId){run(function(){return API.assignPost(postId,clientId||null);},clientId?'Client assigned':'Post unassigned');U.closeModal();},
+    assign:function(postId,clientId){run(function(){return API.assignPost(postId,clientId||null);},clientId?'Client assigned':'Post unassigned');},
     saveAssignment:function(postId){
       var el=document.getElementById('post-client'),clientId=el?el.value:'';
       run(function(){return API.assignPost(postId,clientId||null);},clientId?'Client assigned':'Post unassigned');U.closeModal();
@@ -149,7 +154,7 @@
     assignAndReview:function(postId){
       var el=document.getElementById('post-client'),clientId=el?el.value:'';
       if(!clientId){U.toast('Choose a client first');return;}
-      run(function(){return API.assignAndSendForReview(postId,clientId);},'Assigned and sent for review');U.closeModal();
+      run(function(){return API.assignAndSendForReview(postId,clientId);},'Assigned and sent for review');
     },
     sendReview:function(postId){run(function(){return API.sendForReview(postId);},'Latest Buffer snapshot sent for review');U.closeModal();},
     creatorComment:function(postId){var el=document.getElementById('creator-comment'),body=el?el.value.trim():'';if(!body){U.toast('Write a note first');return;}run(function(){return API.addCreatorComment(postId,body);},'Creator note added');U.closeModal();},
