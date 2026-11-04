@@ -205,7 +205,8 @@ async function syncBuffer(user,event){
   for(const post of pulled.posts){
     const snap=snapshotFromBuffer(post),fp=C.fingerprint(snap);
     const existing=await db.one('content_items','select=*&user_id=eq.'+q(user.id)+'&buffer_post_id=eq.'+q(post.bufferId));
-    if(!existing||existing.archived)continue; // Browsing never inserts. Archived posts remain immutable.\n    if(existing.current_fingerprint!==fp){
+    if(!existing||existing.archived)continue; // Browsing never inserts. Archived posts remain immutable.
+    if(existing.current_fingerprint!==fp){
       const version=(existing.version||1)+1;
       const snapshots=await db.insert('content_snapshots',{content_item_id:existing.id,user_id:user.id,version,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});
       const hadReview=Boolean(existing.review_snapshot_id);
