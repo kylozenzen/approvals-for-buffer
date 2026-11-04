@@ -55,6 +55,13 @@ const CREATE_NOTE_MUTATION=`mutation CreateNote($input: CreateCollaborationNoteI
   }
 }`;
 
+const DELETE_NOTE_MUTATION=`mutation DeleteNote($input: DeleteCollaborationNoteInput!) {
+  deleteCollaborationNote(input: $input) {
+    __typename
+    ... on MutationError { message }
+  }
+}`;
+
 async function call(token,query,variables){
   const res=await fetch('https://api.buffer.com',{
     method:'POST',
@@ -155,4 +162,13 @@ async function createPostNote(token,postId,text){
   return {id:node&&node.id?String(node.id):null};
 }
 
-module.exports={getPosts,listPostNotes,createPostNote,normalizeNote,isScopeError,call};
+async function deletePostNote(token,noteId){
+  const data=await call(token,DELETE_NOTE_MUTATION,{input:{noteId}});
+  const result=data.data&&data.data.deleteCollaborationNote;
+  if(!result||result.__typename!=='DeleteCollaborationNoteSuccess'){
+    throw Object.assign(new Error((result&&result.message)||'Buffer did not delete the note.'),{statusCode:502,typename:result&&result.__typename});
+  }
+  return true;
+}
+
+module.exports={getPosts,listPostNotes,createPostNote,deletePostNote,normalizeNote,isScopeError,call};
