@@ -33,29 +33,33 @@
   function creator(action,payload,extra){return request('/.netlify/functions/creator-api',{action:action,payload:payload||{}},extra);}
   function review(action,token,payload){return request('/.netlify/functions/review-api',{action:action,token:token,payload:payload||{}});}
 
-  async function bootstrap(){if(mode==='remote')return creator('bootstrap');return clone(loadDemo());}
+  function demoActive(d){return d.clients.filter(c=>c.active!==false);}
+  function demoSlot(d,id,except){return d.posts.find(p=>p.clientId===id&&!p.archived&&p.id!==except);}
+  function capacity(d){var rooms=demoActive(d);return {activeRooms:rooms.length,maxRooms:3,rooms:rooms.map(c=>({id:c.id,activePosts:d.posts.filter(p=>p.clientId===c.id&&!p.archived).length})),overLimit:{rooms:rooms.length>3,postRooms:rooms.filter(c=>d.posts.filter(p=>p.clientId===c.id&&!p.archived).length>1).map(c=>c.id)}};}
+  async function bootstrap(){if(mode==='remote')return creator('bootstrap');var d=loadDemo();return Object.assign(clone(d),{clients:clone(demoActive(d)),posts:clone(d.posts.filter(p=>!p.archived)),capacity:capacity(d),demo:true});}
   async function createClient(payload){
     if(mode==='remote')return creator('createClient',payload);
-    var data=loadDemo();var c={id:U.id('client'),name:payload.name,company:payload.company,email:payload.email,approvalOwner:payload.approvalOwner||payload.name,approvalNote:payload.approvalNote||'',approvalCode:demoCode(),roomToken:demoToken(payload.company),color:payload.color||'#cafd00',colorText:'#0d0f0c',initials:U.initials(payload.company),active:true};data.clients.push(c);saveDemo(data);return {client:c,data:clone(data)};
+    var data=loadDemo();if(demoActive(data).length>=3)throw new Error('Three active client rooms maximum. Archive a room first.');var c={id:U.id('client'),name:payload.name,company:payload.company,email:payload.email,approvalOwner:payload.approvalOwner||payload.name,approvalNote:payload.approvalNote||'',approvalCode:demoCode(),roomToken:demoToken(payload.company),color:payload.color||'#cafd00',colorText:'#0d0f0c',initials:U.initials(payload.company),active:true};data.clients.push(c);saveDemo(data);return {client:c,data:clone(data)};
   }
   async function rotateClient(clientId,kind){
     if(mode==='remote')return creator('rotateClientSecret',{clientId:clientId,kind:kind});
-    var data=loadDemo(),c=clientFor(data,clientId);if(!c)throw new Error('Client not found');if(kind==='room')c.roomToken=demoToken(c.company);else c.approvalCode=demoCode();saveDemo(data);return {client:clone(c),data:clone(data)};
+    var data=loadDemo(),c=clientFor(data,clientId);if(!c||c.active===false)throw new Error('Active client room not found');if(kind==='room')c.roomToken=demoToken(c.company);else c.approvalCode=demoCode();saveDemo(data);return {client:clone(c),data:clone(data)};
   }
-  async function updateRoomControls(clientId,payload){if(mode==='remote')return creator('updateRoomControls',Object.assign({clientId:clientId},payload||{}));var data=loadDemo(),c=clientFor(data,clientId);if(!c)throw new Error('Client not found');if(payload.clearLock)c.approvalLockedUntil=null;if(Object.prototype.hasOwnProperty.call(payload,'expiresAt'))c.roomTokenExpiresAt=payload.expiresAt;saveDemo(data);return {client:clone(c),data:clone(data)};}
+  async function updateRoomControls(clientId,payload){if(mode==='remote')return creator('updateRoomControls',Object.assign({clientId:clientId},payload||{}));var data=loadDemo(),c=clientFor(data,clientId);if(!c||c.active===false)throw new Error('Active client room not found');if(payload.clearLock)c.approvalLockedUntil=null;if(Object.prototype.hasOwnProperty.call(payload,'expiresAt'))c.roomTokenExpiresAt=payload.expiresAt;saveDemo(data);return {client:clone(c),data:clone(data)};}
   async function assignPost(postId,clientId){
     if(mode==='remote')return creator('assignPost',{postId:postId,clientId:clientId});
-    var data=loadDemo(),p=postFor(data,postId);if(!p)throw new Error('Post not found');p.clientId=clientId||null;saveDemo(data);return {post:clone(p),data:clone(data)};
+    var data=loadDemo(),p=postFor(data,postId);if(!p||p.archived)throw new Error('Active post not found');if(clientId&&(!clientFor(data,clientId)||clientFor(data,clientId).active===false))throw new Error('Active client room not found');if(clientId&&demoSlot(data,clientId,postId))throw new Error('This room already has an active post. Open or archive it first.');p.clientId=clientId||null;saveDemo(data);return {post:clone(p),data:clone(data)};
   }
   async function sendForReview(postId){
     if(mode==='remote')return creator('sendForReview',{postId:postId});
-    var data=loadDemo(),p=postFor(data,postId);if(!p)throw new Error('Post not found');if(!p.clientId)throw new Error('Assign a client first');p.status='review';p.changedSinceReview=false;p.feedback='';p.reviewedVersion=p.version;p.comments=p.comments||[];p.comments.push({authorType:'creator',authorName:'You',body:'Sent this Buffer snapshot for approval.',kind:'system',createdAt:new Date().toISOString()});saveDemo(data);return {post:clone(p),data:clone(data)};
+    var data=loadDemo(),p=postFor(data,postId);if(!p||p.archived)throw new Error('Active post not found');if(!p.clientId)throw new Error('Assign a client first');p.status='review';p.changedSinceReview=false;p.feedback='';p.reviewedVersion=p.version;p.comments=p.comments||[];p.comments.push({authorType:'creator',authorName:'You',body:'Sent this Buffer snapshot for approval.',kind:'system',createdAt:new Date().toISOString()});saveDemo(data);return {post:clone(p),data:clone(data)};
   }
   async function assignAndSendForReview(postId,clientId){
     if(mode==='remote')return creator('assignAndSendForReview',{postId:postId,clientId:clientId});
     var data=loadDemo(),p=postFor(data,postId),c=clientFor(data,clientId);
-    if(!p)throw new Error('Post not found');
-    if(!c)throw new Error('Choose a client first');
+    if(!p||p.archived)throw new Error('Active post not found');
+    if(!c||c.active===false)throw new Error('Choose an active client room');
+    if(demoSlot(data,clientId,postId))throw new Error('This room already has an active post. Archive it first.');
     if(p.status!=='draft'&&p.clientId&&p.clientId!==clientId)throw new Error('This post is already in another client room');
     p.clientId=clientId;p.status='review';p.changedSinceReview=false;p.feedback='';p.reviewedVersion=p.version;p.comments=p.comments||[];
     p.comments.push({authorType:'creator',authorName:'You',body:'Assigned to '+c.company+' and sent this Buffer snapshot for approval.',kind:'system',createdAt:new Date().toISOString()});
@@ -68,7 +72,31 @@
   async function selectBufferOrganization(organizationId){if(mode==='remote')return creator('selectBufferOrganization',{organizationId:organizationId});return {ok:true};}
   async function syncBuffer(token){
     if(mode==='remote')return creator('syncBuffer',{},ENABLE_BYO_BUFFER_KEY&&token?{'x-buffer-token':token}:{});
-    var data=loadDemo();data.lastSync=new Date().toISOString();var unassigned=data.posts.find(function(p){return p.bufferId==='buf_demo_new';});if(!unassigned){data.posts.unshift({id:U.id('post'),bufferId:'buf_demo_new',clientId:null,title:'Fresh Buffer draft',caption:'A newly synced Buffer draft appears here, ready to assign to a client.',image:'',platform:'LinkedIn',service:'linkedin',status:'draft',bufferStatus:'draft',version:1,changedSinceReview:false,createdAt:new Date().toISOString(),comments:[]});}saveDemo(data);await new Promise(function(r){setTimeout(r,450);});return {data:clone(data),added:unassigned?0:1,updated:data.posts.length};
+    var d=loadDemo();d.lastSync=new Date().toISOString();saveDemo(d);return {data:clone(d),added:0,updated:d.posts.filter(p=>!p.archived).length};
+  }
+  async function bufferCandidates(after){
+    if(mode==='remote')return creator('bufferCandidates',{after:after||null},ENABLE_BYO_BUFFER_KEY&&bufferToken?{'x-buffer-token':bufferToken}:{});
+    var samples=[{bufferId:'buf_demo_candidate_01',caption:'Sample unscheduled Buffer draft (not imported)',platform:'Threads',service:'threads',bufferStatus:'draft',dueAt:null,createdAt:new Date().toISOString()}].concat(window.RECEIPTS_DEMO.posts.filter(p=>p.bufferStatus==='draft'&&!p.dueAt));
+    var page=Number(after||0);return {posts:clone(samples.slice(page,page+3)),after:page+3<samples.length?String(page+3):null,hasNextPage:page+3<samples.length};
+  }
+  async function importSelected(clientId,bufferId,after){
+    if(mode==='remote')return creator('importSelected',{clientId:clientId,bufferId:bufferId,after:after||null},ENABLE_BYO_BUFFER_KEY&&bufferToken?{'x-buffer-token':bufferToken}:{});
+    var d=loadDemo(),c=clientFor(d,clientId),sample=bufferId==='buf_demo_candidate_01'?{bufferId:bufferId,caption:'Sample unscheduled Buffer draft (not imported)',title:'Sample unscheduled Buffer draft',platform:'Threads',service:'threads',bufferStatus:'draft',createdAt:new Date().toISOString()}:window.RECEIPTS_DEMO.posts.find(p=>p.bufferId===bufferId);
+    if(!c||c.active===false)throw new Error('Choose an active client room.');
+    if(demoSlot(d,clientId))throw new Error('This room already has an active post. Open or archive it first.');
+    if(!sample||sample.bufferStatus!=='draft')throw new Error('Buffer draft not available.');
+    if(d.posts.some(p=>p.bufferId===bufferId))throw new Error('This draft was already imported.');
+    var p=Object.assign(clone(sample),{id:U.id('post'),clientId:clientId,status:'draft',archived:false,comments:[],version:1});
+    d.posts.push(p);saveDemo(d);return {post:clone(p)};
+  }
+  async function archivePost(postId){
+    if(mode==='remote')return creator('archivePost',{postId:postId});
+    var d=loadDemo(),p=postFor(d,postId);if(!p)throw new Error('Post not found');p.archived=true;saveDemo(d);return {post:clone(p)};
+  }
+  async function archiveClient(clientId){
+    if(mode==='remote')return creator('archiveClient',{clientId:clientId});
+    var d=loadDemo(),c=clientFor(d,clientId);if(!c)throw new Error('Client room not found');c.active=false;
+    d.posts.filter(p=>p.clientId===clientId).forEach(p=>p.archived=true);saveDemo(d);return {client:clone(c)};
   }
   async function connectBuffer(payload){if(mode==='remote')return creator('connectBuffer',payload);throw new Error('Buffer sign-in needs the shared beta backend. The demo uses sample posts.');}
   async function disconnectBuffer(){if(mode==='remote')return creator('disconnectBuffer');return {buffer:{connected:false}};}
@@ -87,19 +115,19 @@
   }
   async function getReviewRoom(token){
     if(mode==='remote')return review('getRoom',token);
-    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;});if(!c)throw new Error('This approval room was not found.');var posts=clone((data.posts||[]).filter(function(p){return p.clientId===c.id&&p.status!=='draft';}));posts.forEach(function(p){p.comments=(p.comments||[]).filter(function(x){return x.clientVisible!==false;});});return {client:clone(c),posts:posts,demo:true};
+    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;});if(!c||c.active===false)throw new Error('This approval room is archived or unavailable.');var posts=clone((data.posts||[]).filter(function(p){return p.clientId===c.id&&!p.archived&&p.status!=='draft';}));posts.forEach(function(p){p.comments=(p.comments||[]).filter(function(x){return x.clientVisible!==false;});});return {client:clone(c),posts:posts,demo:true};
   }
   async function addReviewComment(token,postId,name,body){
     if(mode==='remote')return review('addComment',token,{postId:postId,name:name,body:body});
-    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;}),p=postFor(data,postId);if(!c||!p||p.clientId!==c.id)throw new Error('Post not found');p.comments=p.comments||[];p.comments.push({authorType:'client',authorName:name||'Client',body:body,kind:'comment',createdAt:new Date().toISOString()});saveDemo(data);return {ok:true};
+    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;}),p=postFor(data,postId);if(!c||c.active===false||!p||p.archived||p.clientId!==c.id)throw new Error('Post not found');p.comments=p.comments||[];p.comments.push({authorType:'client',authorName:name||'Client',body:body,kind:'comment',createdAt:new Date().toISOString()});saveDemo(data);return {ok:true};
   }
   async function requestChanges(token,postId,name,body){
     if(mode==='remote')return review('requestChanges',token,{postId:postId,name:name,body:body});
-    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;}),p=postFor(data,postId);if(!c||!p||p.clientId!==c.id)throw new Error('Post not found');p.status='changes';p.feedback=body;p.comments=p.comments||[];p.comments.push({authorType:'client',authorName:name||'Client',body:body,kind:'change',createdAt:new Date().toISOString()});saveDemo(data);return {ok:true};
+    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;}),p=postFor(data,postId);if(!c||c.active===false||!p||p.archived||p.clientId!==c.id)throw new Error('Post not found');p.status='changes';p.feedback=body;p.comments=p.comments||[];p.comments.push({authorType:'client',authorName:name||'Client',body:body,kind:'change',createdAt:new Date().toISOString()});saveDemo(data);return {ok:true};
   }
   async function approvePost(token,postId,name,code){
     if(mode==='remote')return review('approve',token,{postId:postId,code:code});
-    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;}),p=postFor(data,postId);if(!c||!p||p.clientId!==c.id)throw new Error('Post not found');if(code!==c.approvalCode)throw new Error('Owner code does not match.');if(p.changedSinceReview)throw new Error('This post changed in Buffer after review began. Ask the creator to resend it.');var receiptCode=demoReceiptCode(),fingerprint=p.fingerprint||demoFingerprint(p),now=new Date().toISOString();p.status='approved';p.approvedBy=c.approvalOwner;p.approvedAt=now;p.receiptCode=receiptCode;p.fingerprint=fingerprint;p.comments=p.comments||[];p.comments.push({authorType:'client',authorName:p.approvedBy,body:'Final approval stamped with the owner code.',kind:'approval',createdAt:now});data.receipts.unshift({id:U.id('receipt'),receiptCode:receiptCode,postId:p.id,clientId:c.id,clientCompany:c.company,title:p.title,platform:p.platform,approverName:p.approvedBy,approvedAt:now,version:p.version,fingerprint:fingerprint,snapshot:{caption:p.caption,image:p.image,platform:p.platform}});saveDemo(data);return {receiptCode:receiptCode,approvedAt:now};
+    var data=loadDemo(),c=(data.clients||[]).find(function(x){return x.roomToken===token;}),p=postFor(data,postId);if(!c||c.active===false||!p||p.archived||p.clientId!==c.id)throw new Error('Post not found');if(code!==c.approvalCode)throw new Error('Owner code does not match.');if(p.changedSinceReview)throw new Error('This post changed in Buffer after review began. Ask the creator to resend it.');var receiptCode=demoReceiptCode(),fingerprint=p.fingerprint||demoFingerprint(p),now=new Date().toISOString();p.status='approved';p.approvedBy=c.approvalOwner;p.approvedAt=now;p.receiptCode=receiptCode;p.fingerprint=fingerprint;p.comments=p.comments||[];p.comments.push({authorType:'client',authorName:p.approvedBy,body:'Final approval stamped with the owner code.',kind:'approval',createdAt:now});data.receipts.unshift({id:U.id('receipt'),receiptCode:receiptCode,postId:p.id,clientId:c.id,clientCompany:c.company,title:p.title,platform:p.platform,approverName:p.approvedBy,approvedAt:now,version:p.version,fingerprint:fingerprint,snapshot:{caption:p.caption,image:p.image,platform:p.platform}});saveDemo(data);return {receiptCode:receiptCode,approvedAt:now};
   }
   async function reset(){if(mode==='remote')throw new Error('Reset is only available in demo mode.');return resetDemo();}
   function getMode(){return mode;}
@@ -108,5 +136,5 @@
   function saveBufferToken(token){if(ENABLE_BYO_BUFFER_KEY)bufferToken=String(token||'');}
   function byoBufferKeyEnabled(){return ENABLE_BYO_BUFFER_KEY;}
 
-  window.ReceiptsAPI={init:init,setSession:setSession,bootstrap:bootstrap,createClient:createClient,rotateClient:rotateClient,updateRoomControls:updateRoomControls,assignPost:assignPost,sendForReview:sendForReview,assignAndSendForReview:assignAndSendForReview,addCreatorComment:addCreatorComment,selectBufferOrganization:selectBufferOrganization,syncBuffer:syncBuffer,connectBuffer:connectBuffer,disconnectBuffer:disconnectBuffer,setNoteVisibility:setNoteVisibility,inviteClient:inviteClient,resendApprovalEmail:resendApprovalEmail,getPostDetail:getPostDetail,getReviewRoom:getReviewRoom,addReviewComment:addReviewComment,requestChanges:requestChanges,approvePost:approvePost,reset:reset,getMode:getMode,getConfig:getConfig,getBufferToken:getBufferToken,saveBufferToken:saveBufferToken,byoBufferKeyEnabled:byoBufferKeyEnabled};
+  window.ReceiptsAPI={init:init,setSession:setSession,bootstrap:bootstrap,createClient:createClient,rotateClient:rotateClient,updateRoomControls:updateRoomControls,assignPost:assignPost,sendForReview:sendForReview,assignAndSendForReview:assignAndSendForReview,addCreatorComment:addCreatorComment,selectBufferOrganization:selectBufferOrganization,syncBuffer:syncBuffer,bufferCandidates:bufferCandidates,importSelected:importSelected,archivePost:archivePost,archiveClient:archiveClient,connectBuffer:connectBuffer,disconnectBuffer:disconnectBuffer,setNoteVisibility:setNoteVisibility,inviteClient:inviteClient,resendApprovalEmail:resendApprovalEmail,getPostDetail:getPostDetail,getReviewRoom:getReviewRoom,addReviewComment:addReviewComment,requestChanges:requestChanges,approvePost:approvePost,reset:reset,getMode:getMode,getConfig:getConfig,getBufferToken:getBufferToken,saveBufferToken:saveBufferToken,byoBufferKeyEnabled:byoBufferKeyEnabled};
 })();

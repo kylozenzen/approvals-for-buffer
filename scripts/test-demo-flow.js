@@ -24,9 +24,15 @@ async function main(){
   assert.equal(started.mode,'demo');
 
   const initial=await API.bootstrap();
-  const post=initial.posts.find(item=>item.status==='draft');
   const client=initial.clients[0];
-  assert.ok(post,'Demo data should include a draft post');
+  const existing=initial.posts.find(item=>item.clientId===client.id);
+  assert.ok(existing,'Demo data should include a room post');
+  await API.archivePost(existing.id);
+  const candidate=await API.bufferCandidates();
+  const draft=candidate.posts.find(p=>p.bufferId==='buf_demo_candidate_01');
+  assert.ok(draft,'Demo picker should return transient candidate');
+  const post=(await API.importSelected(client.id,draft.bufferId)).post;
+  assert.ok(post,'Selected demo candidate should import');
   assert.ok(client,'Demo data should include a client');
 
   await API.assignAndSendForReview(post.id,client.id);
