@@ -76,12 +76,12 @@
   }
   async function bufferCandidates(after){
     if(mode==='remote')return creator('bufferCandidates',{after:after||null},ENABLE_BYO_BUFFER_KEY&&bufferToken?{'x-buffer-token':bufferToken}:{});
-    var samples=window.RECEIPTS_DEMO.posts.filter(p=>p.bufferStatus==='draft'&&!p.dueAt);
+    var samples=[{bufferId:'buf_demo_candidate_01',caption:'Sample unscheduled Buffer draft (not imported)',platform:'Threads',service:'threads',bufferStatus:'draft',dueAt:null,createdAt:new Date().toISOString()}].concat(window.RECEIPTS_DEMO.posts.filter(p=>p.bufferStatus==='draft'&&!p.dueAt));
     var page=Number(after||0);return {posts:clone(samples.slice(page,page+3)),after:page+3<samples.length?String(page+3):null,hasNextPage:page+3<samples.length};
   }
   async function importSelected(clientId,bufferId,after){
     if(mode==='remote')return creator('importSelected',{clientId:clientId,bufferId:bufferId,after:after||null},ENABLE_BYO_BUFFER_KEY&&bufferToken?{'x-buffer-token':bufferToken}:{});
-    var d=loadDemo(),c=clientFor(d,clientId),sample=window.RECEIPTS_DEMO.posts.find(p=>p.bufferId===bufferId);
+    var d=loadDemo(),c=clientFor(d,clientId),sample=bufferId==='buf_demo_candidate_01'?{bufferId:bufferId,caption:'Sample unscheduled Buffer draft (not imported)',title:'Sample unscheduled Buffer draft',platform:'Threads',service:'threads',bufferStatus:'draft',createdAt:new Date().toISOString()}:window.RECEIPTS_DEMO.posts.find(p=>p.bufferId===bufferId);
     if(!c||c.active===false)throw new Error('Choose an active client room.');
     if(demoSlot(d,clientId))throw new Error('This room already has an active post. Open or archive it first.');
     if(!sample||sample.bufferStatus!=='draft')throw new Error('Buffer draft not available.');
