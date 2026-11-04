@@ -12,7 +12,7 @@ function titleFromCaption(value){const clean=String(value||'').replace(/\s+/g,' 
 function publicBase(event){return (process.env.APP_BASE_URL||((event.headers['x-forwarded-proto']||'https')+'://'+event.headers.host)).replace(/\/$/,'');}
 function mapClient(row){let roomToken='',approvalCode='';try{roomToken=C.decrypt(row.room_token_ciphertext);}catch(e){}try{approvalCode=C.decrypt(row.approval_code_ciphertext);}catch(e){}return {id:row.id,name:row.contact_name,company:row.company,email:row.email,approvalOwner:row.approval_owner,approvalNote:row.approval_note||'',roomToken,approvalCode,color:row.color||'#cafd00',colorText:row.color_text||'#0d0f0c',initials:row.initials||'',active:row.active!==false,approvalLockedUntil:row.approval_locked_until||null,roomTokenExpiresAt:row.room_token_expires_at||null};}
 function mapItem(row){return {id:row.id,bufferId:row.buffer_post_id,clientId:row.client_id,title:row.title,caption:row.caption||'',image:row.image_url||'',platform:row.platform||'Buffer',service:row.service||'',channelId:row.channel_id||'',status:row.status||'draft',bufferStatus:row.buffer_status||'draft',dueAt:row.due_at,version:row.version||1,changedSinceReview:Boolean(row.changed_since_review),approvedBy:row.approved_by,approvedAt:row.approved_at,receiptCode:row.receipt_code,currentFingerprint:row.current_fingerprint,createdAt:row.source_created_at||row.created_at,updatedAt:row.updated_at};}
-function mapComment(row){return {id:row.id,authorType:row.author_type,authorName:row.author_name,body:row.body,kind:row.kind,source:row.source||'receipts',clientVisible:row.client_visible!==false,createdAt:row.created_at};}
+function mapComment(row){return {id:row.id,authorType:row.author_type,authorName:row.author_name,body:row.body,kind:row.kind,source:row.source||'receipts',clientVisible:row.client_visible!==false,inBuffer:Boolean(row.buffer_note_id)&&row.source!=='buffer',createdAt:row.created_at};}
 function mapReceipt(row){return {id:row.id,receiptCode:row.receipt_code,postId:row.content_item_id,clientId:row.client_id,clientCompany:row.client_company,title:row.title,platform:row.platform,approverName:row.approver_name,approvedAt:row.approved_at,version:row.version,fingerprint:row.fingerprint,snapshot:row.snapshot_json||{}};}
 async function ownItem(userId,id){return db.one('content_items','select=*&id=eq.'+q(id)+'&user_id=eq.'+q(userId));}
 async function ownClient(userId,id){return db.one('clients','select=*&id=eq.'+q(id)+'&user_id=eq.'+q(userId));}
@@ -76,36 +76,61 @@ async function resolveBufferToken(user,event){
 }
 async function pullBufferPosts(user,event,orgId){
   const resolved=await resolveBufferToken(user,event);
-  try{return await BufferAPI.getPosts(resolved.token,orgId);}
+  try{return {pulled:await BufferAPI.getPosts(resolved.token,orgId),token:resolved.token,source:resolved.source};}
   catch(e){
     // An OAuth access token can be revoked or expire early: refresh once and retry.
     if(resolved.source!=='oauth'||e.bufferStatus!==401)throw e;
-    return BufferAPI.getPosts(await BufferOAuth.accessToken(user.id,true),orgId);
+    const token=await BufferOAuth.accessToken(user.id,true);
+    return {pulled:await BufferAPI.getPosts(token,orgId),token,source:'oauth'};
   }
 }
 function noteRow(user,target,note){
   return {content_item_id:target.itemId,user_id:user.id,snapshot_id:target.snapshotId||null,author_type:'buffer',author_name:String(note.authorName||'Buffer teammate').slice(0,80),body:String(note.text).slice(0,4000),kind:'note',source:'buffer',buffer_note_id:note.id,client_visible:false,external_updated_at:note.updatedAt||null,created_at:note.createdAt||new Date().toISOString()};
 }
-// Mirrors each synced post's Buffer notes into its comment thread: new notes are
-// added (hidden from the client room), edited notes are updated, deleted notes removed.
-async function syncNotes(user,pulled,targets){
-  const out={notesAdded:0,notesUpdated:0,notesRemoved:0,notesAvailable:Boolean(pulled.notesAvailable)};
-  if(!pulled.notesAvailable||!targets.length)return out;
+// Runs fn over items with at most `limit` in flight, so a sync stays inside the
+// function time limit without bursting Buffer's rate limit.
+async function eachLimited(items,limit,fn){
+  let next=0;
+  const workers=Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;await fn(items[i],i);}});
+  await Promise.all(workers);
+}
+// Mirrors each client-assigned post's Buffer Notes thread into Receipts: new notes
+// are added (hidden from the client room), edited notes updated, deleted notes
+// removed. Notes Receipts itself wrote to Buffer are recognised and skipped.
+async function syncNotes(user,token,targets){
+  const out={notesAdded:0,notesUpdated:0,notesRemoved:0,notesAvailable:true,notesChecked:targets.length};
+  if(!token||!targets.length)return out;
   let existing;
-  try{existing=await db.select('comments','select=id,content_item_id,buffer_note_id,body,author_name,external_updated_at&source=eq.buffer&user_id=eq.'+q(user.id)+'&content_item_id=in.('+targets.map(t=>t.itemId).join(',')+')');}
+  try{existing=await db.select('comments','select=id,content_item_id,buffer_note_id,source,body,author_name&user_id=eq.'+q(user.id)+'&buffer_note_id=not.is.null&content_item_id=in.('+targets.map(t=>t.itemId).join(',')+')');}
   catch(e){console.warn('[Receipts] Skipping Buffer notes (run migration 003):',e.message);out.notesAvailable=false;out.notesNeedMigration=true;return out;}
-  const byItem={};
-  (existing||[]).forEach(row=>{(byItem[row.content_item_id]||(byItem[row.content_item_id]={}))[row.buffer_note_id]=row;});
+  const fetched={};let scopeError=false;
+  await eachLimited(targets,4,async target=>{
+    if(scopeError)return;
+    try{fetched[target.itemId]=await BufferAPI.listPostNotes(token,target.postId);}
+    catch(e){
+      if(BufferAPI.isScopeError(e)){scopeError=true;return;}
+      console.warn('[Receipts] Could not read Buffer notes for post',target.postId,e.message);
+    }
+  });
+  if(scopeError){out.notesAvailable=false;out.notesNeedScope=true;return out;}
+  const byItem={},mirrored=new Set();
+  (existing||[]).forEach(row=>{
+    if(row.source!=='buffer'){mirrored.add(row.buffer_note_id);return;}
+    (byItem[row.content_item_id]||(byItem[row.content_item_id]={}))[row.buffer_note_id]=row;
+  });
   const inserts=[],removals=[];
   for(const target of targets){
+    const notes=fetched[target.itemId];
+    if(!notes)continue; // read failed: leave this post's saved notes untouched
     const saved=byItem[target.itemId]||{},current=new Set();
-    for(const note of target.notes){
+    for(const note of notes){
+      if(mirrored.has(note.id))continue;
       current.add(note.id);
       const row=saved[note.id];
       if(!row){inserts.push(noteRow(user,target,note));continue;}
-      const body=String(note.text).slice(0,4000);
-      if(row.body!==body||row.author_name!==note.authorName){
-        await db.update('comments','id=eq.'+q(row.id)+'&user_id=eq.'+q(user.id),{body,author_name:String(note.authorName||'Buffer teammate').slice(0,80),external_updated_at:note.updatedAt||null});
+      const body=String(note.text).slice(0,4000),author=String(note.authorName||'Buffer teammate').slice(0,80);
+      if(row.body!==body||row.author_name!==author){
+        await db.update('comments','id=eq.'+q(row.id)+'&user_id=eq.'+q(user.id),{body,author_name:author,external_updated_at:note.updatedAt||null});
         out.notesUpdated++;
       }
     }
@@ -117,7 +142,7 @@ async function syncNotes(user,pulled,targets){
 }
 async function syncBuffer(user,event){
   const profile=await db.one('profiles','select=buffer_organization_id&id=eq.'+q(user.id));
-  const pulled=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id);
+  const {pulled,token}=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id);
   let added=0,updated=0,changed=0;const noteTargets=[];
   for(const post of pulled.posts){
     const snap=snapshotFromBuffer(post),fp=C.fingerprint(snap);
@@ -127,7 +152,6 @@ async function syncBuffer(user,event){
       const item=inserted[0];
       const snapshots=await db.insert('content_snapshots',{content_item_id:item.id,user_id:user.id,version:1,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});
       await db.update('content_items','id=eq.'+q(item.id),{latest_snapshot_id:snapshots[0].id});
-      noteTargets.push({itemId:item.id,snapshotId:snapshots[0].id,notes:post.notes||[]});
       added++;continue;
     }
     if(existing.current_fingerprint!==fp){
@@ -135,15 +159,16 @@ async function syncBuffer(user,event){
       const snapshots=await db.insert('content_snapshots',{content_item_id:existing.id,user_id:user.id,version,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});
       const hadReview=Boolean(existing.review_snapshot_id);
       await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{title:titleFromCaption(post.caption),caption:post.caption||'',image_url:post.image||'',platform:post.platform||'Buffer',service:post.service||'',channel_id:post.channelId||'',buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,version,current_fingerprint:fp,latest_snapshot_id:snapshots[0].id,status:hadReview?'draft':existing.status,changed_since_review:hadReview,approved_by:null,approved_at:null,receipt_code:null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});
-      noteTargets.push({itemId:existing.id,snapshotId:snapshots[0].id,notes:post.notes||[]});
+      if(existing.client_id)noteTargets.push({itemId:existing.id,postId:post.bufferId,snapshotId:snapshots[0].id});
       changed++;updated++;
     }else{
       await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});
-      noteTargets.push({itemId:existing.id,snapshotId:existing.review_snapshot_id||existing.latest_snapshot_id,notes:post.notes||[]});
+      if(existing.client_id)noteTargets.push({itemId:existing.id,postId:post.bufferId,snapshotId:existing.review_snapshot_id||existing.latest_snapshot_id});
       updated++;
     }
   }
-  const notes=await syncNotes(user,pulled,noteTargets);
+  // Notes are read only for posts already in a client room, to keep sync fast and within rate limits.
+  const notes=await syncNotes(user,token,noteTargets);
   return Object.assign({added,updated,changed,organization:pulled.organization,organizationCount:pulled.organizationCount||0,organizations:pulled.organizations||[],truncated:Boolean(pulled.truncated)},notes);
 }
 async function setNoteVisibility(user,p){

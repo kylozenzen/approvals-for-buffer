@@ -50,6 +50,7 @@
       var noteCount=(out.notesAdded||0)+(out.notesUpdated||0);
       U.toast((total?'Buffer synced · '+total+' post'+(total===1?'':'s')+' checked':'Buffer synced · no active posts found')+(noteCount?' · '+noteCount+' Buffer note'+(noteCount===1?'':'s')+' pulled in':''));
       if(out.notesNeedMigration)U.toast('Buffer notes need Supabase migration 003 before they can sync.');
+      if(out.notesNeedScope)U.toast(bufferConnected()?'Reconnect Buffer in Settings to allow Notes, then sync again.':'Your Buffer key needs Notes access (notes:read and notes:write). Make a new key with Notes enabled.');
       if(out.truncated)U.toast('Buffer returned the first 50 active posts.');
       var selected=state.data&&state.data.profile&&state.data.profile.bufferOrganizationId;
       if(out.organizationCount>1&&!selected&&!options.deferOrganization)U.openModal(UI.organizationModal(state.bufferOrganizations,out.organization&&out.organization.id));
@@ -69,7 +70,7 @@
       var cfg=API.getConfig();
       if(API.getMode()!=='remote'){U.toast('Buffer sign-in works once the shared beta backend is configured.');return;}
       if(!cfg.bufferOAuthConfigured||!window.BufferOAuth){U.toast('Buffer sign-in is not configured yet. Paste a Buffer API key instead.');return;}
-      try{await window.BufferOAuth.startAuthorization({prefix:BUFFER_OAUTH_PREFIX,clientId:cfg.bufferOAuthClientId,redirectUri:window.location.origin+BUFFER_CALLBACK_PATH,scope:cfg.bufferOAuthScope||'posts:read posts:write account:read offline_access',returnTo:'/app'});}
+      try{await window.BufferOAuth.startAuthorization({prefix:BUFFER_OAUTH_PREFIX,clientId:cfg.bufferOAuthClientId,redirectUri:window.location.origin+BUFFER_CALLBACK_PATH,scope:cfg.bufferOAuthScope||'posts:read posts:write account:read notes:read notes:write offline_access',returnTo:'/app'});}
       catch(e){U.toast(e.message||'Could not start Buffer sign-in');}
     },
     disconnectBuffer:function(){if(!window.confirm('Disconnect Buffer? Receipts will stop syncing until you connect again. Existing posts and receipts stay.'))return;run(function(){return API.disconnectBuffer();},'Buffer disconnected');},
