@@ -120,6 +120,18 @@ async function syncTests(){
   out=await runSync();
   assert.equal(calls.remove.length,0);
   assert.equal(out.notesAdded,0);
+  assert.equal(out.notesError,'Buffer timeout','read failures are reported to the app, not swallowed');
+  assert.equal(out.notesFailed,1);
+
+  // Opening a post refreshes that post's notes live and reports the result.
+  calls=syncHarness(()=>[{id:'n_live',text:'Fresh from Buffer',authorName:'Sam'}]);
+  const db=require(path.join(functionsRoot,'_lib/supabase.js'));
+  db.one=(orig=>async(table,query)=>table==='content_items'&&/id=eq.item_1/.test(query)?{id:'item_1',user_id:'user_1',client_id:'client_1',buffer_post_id:'buf_assigned',review_snapshot_id:'snap_1'}:orig(table,query))(db.one);
+  const api=fresh('creator-api.js');
+  const res=await api.handler({httpMethod:'POST',headers:{authorization:'Bearer x','x-buffer-token':'key_with_notes'},body:JSON.stringify({action:'postDetail',payload:{postId:'item_1'}})});
+  assert.equal(res.statusCode,200,res.body);
+  assert.deepEqual(calls.listed,['buf_assigned']);
+  assert.equal(JSON.parse(res.body).notes.added,1);
 }
 
 async function writeBackTests(){

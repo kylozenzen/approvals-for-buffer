@@ -6,7 +6,9 @@
 - Client comments, change requests and approvals are now added to the Buffer post as Notes ("James (Coffee Chaz) commented in Receipts: …"), and tagged "Copied to Buffer" in the creator's thread.
 - Notes are read only for posts already in a client room, four at a time, to stay inside Buffer's rate limits.
 - Notes Receipts wrote are never pulled back in as duplicates; client comments are never deleted by sync.
-- Default OAuth scopes now include `notes:read notes:write`. Missing scopes show a clear "reconnect" or "new key" message instead of failing quietly.
+- Default OAuth scopes now include `notes:read notes:write`.
+- No more pressing Sync: the board syncs quietly on load, every 2 minutes while open, and when you return to the tab. Opening a post pulls its Buffer notes live.
+- Notes errors are shown in the app instead of only in server logs. Missing scopes show a clear "reconnect" or "new key" message instead of failing quietly.
 
 ## 1.3.0 — Buffer notes + Connect with Buffer
 

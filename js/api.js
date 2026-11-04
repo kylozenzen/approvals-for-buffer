@@ -82,7 +82,7 @@
     var data=loadDemo(),c=clientFor(data,clientId);if(!c)throw new Error('Client not found');return {sent:false,preview:'Review room: '+U.roomUrl(c.roomToken)+'\nOwner code: '+c.approvalCode};
   }
   async function getPostDetail(postId){
-    if(mode==='remote')return creator('postDetail',{postId:postId});
+    if(mode==='remote')return creator('postDetail',{postId:postId},ENABLE_BYO_BUFFER_KEY&&bufferToken?{'x-buffer-token':bufferToken}:{});
     var data=loadDemo(),p=postFor(data,postId);if(!p)throw new Error('Post not found');return {post:clone(p),client:clone(clientFor(data,p.clientId)||null),comments:clone(p.comments||[])};
   }
   async function getReviewRoom(token){
