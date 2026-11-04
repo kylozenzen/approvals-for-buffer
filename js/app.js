@@ -16,7 +16,7 @@
       document.getElementById('nudge-root').innerHTML=UI.approvalNudge();
     }
   }
-  async function loadCreator(){app.innerHTML=UI.loading('Loading your approval board…');try{state.data=await API.bootstrap();render();afterCreatorLoad();}catch(e){app.innerHTML=UI.error(e.message);}}
+  async function loadCreator(){app.innerHTML=UI.loading('Loading your approval board…');try{state.data=await API.bootstrap();render();afterCreatorLoad();setTimeout(afterCreatorReady,0);}catch(e){app.innerHTML=UI.error(e.message);}}
   async function loadRoom(){app.innerHTML=UI.loading('Opening approval room…');try{state.room=await API.getReviewRoom(state.reviewToken);if(state.expandedReviewPostId===undefined){var firstWaiting=(state.room.posts||[]).find(function(p){return p.status==='review';});state.expandedReviewPostId=firstWaiting?firstWaiting.id:null;}render();}catch(e){app.innerHTML=UI.error(e.message);}}
   async function refresh(){if(state.reviewToken)return loadRoom();return loadCreator();}
   async function boot(){app.innerHTML=UI.loading();state.reviewToken=getReviewToken();try{if(state.reviewToken){await API.init();return loadRoom();}var auth=await Auth.init();state.session=auth.session;if(auth.mode==='remote'&&!auth.session){render();return;}if(isBufferCallback())return finishBufferConnect();await loadCreator();}catch(e){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError(e.message):UI.error(e.message);}}
@@ -39,23 +39,53 @@
     U.toast('Buffer connected');
     await performSync();
   }
+  var syncing=false,lastSyncAt=0,lastNoteError='';
+  function canAutoSync(){return API.getMode()==='remote'&&Boolean(API.getBufferToken()||bufferConnected()||API.getConfig().bufferKeyConfigured);}
+  // Reload board data without the full-screen loading state (open modals live in #modal-root and stay put).
+  async function softRefresh(){try{state.data=await API.bootstrap();render();}catch(e){}}
+  function noteMessages(out,quiet){
+    if(out.notesNeedMigration)U.toast('Buffer notes need Supabase migration 003 before they can sync.');
+    if(out.notesNeedScope)U.toast(bufferConnected()?'Reconnect Buffer in Settings to allow Notes.':'Your Buffer key needs Notes access (notes:read and notes:write). Make a new key with Notes enabled.');
+    if(out.notesError){var msg='Buffer Notes could not be read: '+out.notesError;if(!quiet||msg!==lastNoteError)U.toast(msg);lastNoteError=msg;}
+    if(out.notesPushError){var pmsg='Could not add client comments to Buffer: '+out.notesPushError;if(!quiet||pmsg!==lastNoteError)U.toast(pmsg);lastNoteError=pmsg;}
+    if(out.notesPushed)U.toast(out.notesPushed+' client comment'+(out.notesPushed===1?'':'s')+' added to Buffer');
+    if(out.notesNoToken&&!quiet)U.toast('Receipts can\'t reach Buffer in this tab. Paste your Buffer key (with Notes access) or connect Buffer in Settings.');
+  }
+  // quiet: background sync on load, on a timer, and when the tab regains focus.
+  // It only speaks up when something new arrived or something needs fixing.
   async function performSync(options){
     options=options||{};
+    if(syncing)return null;
+    syncing=true;
     try{
-      U.toast('Syncing Buffer…');
+      if(!options.quiet)U.toast('Syncing Buffer…');
       var out=await API.syncBuffer(API.getBufferToken());
+      lastSyncAt=Date.now();
       state.bufferOrganizations=out.organizations||[];
-      await refresh();
+      if(options.quiet)await softRefresh();else await refresh();
       var total=(out.added||0)+(out.updated||0);
       var noteCount=(out.notesAdded||0)+(out.notesUpdated||0);
-      U.toast((total?'Buffer synced · '+total+' post'+(total===1?'':'s')+' checked':'Buffer synced · no active posts found')+(noteCount?' · '+noteCount+' Buffer note'+(noteCount===1?'':'s')+' pulled in':''));
-      if(out.notesNeedMigration)U.toast('Buffer notes need Supabase migration 003 before they can sync.');
-      if(out.truncated)U.toast('Buffer returned the first 50 active posts.');
+      if(!options.quiet)U.toast((total?'Buffer synced · '+total+' post'+(total===1?'':'s')+' checked':'Buffer synced · no active posts found')+(noteCount?' · '+noteCount+' Buffer note'+(noteCount===1?'':'s')+' pulled in':''));
+      else if(out.added||noteCount)U.toast((out.added?out.added+' new Buffer post'+(out.added===1?'':'s'):'')+(out.added&&noteCount?' · ':'')+(noteCount?noteCount+' Buffer note'+(noteCount===1?'':'s')+' pulled in':''));
+      noteMessages(out,options.quiet);
+      if(out.truncated&&!options.quiet)U.toast('Buffer returned the first 50 active posts.');
       var selected=state.data&&state.data.profile&&state.data.profile.bufferOrganizationId;
       if(out.organizationCount>1&&!selected&&!options.deferOrganization)U.openModal(UI.organizationModal(state.bufferOrganizations,out.organization&&out.organization.id));
       return out;
-    }catch(e){if(options.throwOnError)throw e;U.toast(e.message||'Buffer sync failed');if(/reconnect/i.test(e.message||''))refresh();return null;}
+    }catch(e){
+      if(options.throwOnError)throw e;
+      if(!options.quiet||/reconnect/i.test(e.message||''))U.toast(e.message||'Buffer sync failed');
+      if(/reconnect/i.test(e.message||''))refresh();
+      return null;
+    }finally{syncing=false;}
   }
+  var AUTO_SYNC_MS=2*60*1000;
+  function startAutoSync(){
+    if(startAutoSync.started)return;startAutoSync.started=true;
+    setInterval(function(){if(!state.reviewToken&&document.visibilityState==='visible'&&canAutoSync())performSync({quiet:true,deferOrganization:true});},AUTO_SYNC_MS);
+    document.addEventListener('visibilitychange',function(){if(!state.reviewToken&&document.visibilityState==='visible'&&canAutoSync()&&Date.now()-lastSyncAt>60*1000)performSync({quiet:true,deferOrganization:true});});
+  }
+  function afterCreatorReady(){if(state.reviewToken||API.getMode()!=='remote')return;startAutoSync();if(canAutoSync()&&Date.now()-lastSyncAt>60*1000)performSync({quiet:true,deferOrganization:true});}
 
   window.ReceiptsActions={
     go:function(page){state.page=page;render();window.scrollTo(0,0);},
@@ -69,7 +99,7 @@
       var cfg=API.getConfig();
       if(API.getMode()!=='remote'){U.toast('Buffer sign-in works once the shared beta backend is configured.');return;}
       if(!cfg.bufferOAuthConfigured||!window.BufferOAuth){U.toast('Buffer sign-in is not configured yet. Paste a Buffer API key instead.');return;}
-      try{await window.BufferOAuth.startAuthorization({prefix:BUFFER_OAUTH_PREFIX,clientId:cfg.bufferOAuthClientId,redirectUri:window.location.origin+BUFFER_CALLBACK_PATH,scope:cfg.bufferOAuthScope||'posts:read posts:write account:read offline_access',returnTo:'/app'});}
+      try{await window.BufferOAuth.startAuthorization({prefix:BUFFER_OAUTH_PREFIX,clientId:cfg.bufferOAuthClientId,redirectUri:window.location.origin+BUFFER_CALLBACK_PATH,scope:cfg.bufferOAuthScope||'posts:read posts:write account:read notes:read notes:write offline_access',returnTo:'/app'});}
       catch(e){U.toast(e.message||'Could not start Buffer sign-in');}
     },
     disconnectBuffer:function(){if(!window.confirm('Disconnect Buffer? Receipts will stop syncing until you connect again. Existing posts and receipts stay.'))return;run(function(){return API.disconnectBuffer();},'Buffer disconnected');},
@@ -101,7 +131,7 @@
     },
     newClient:function(){U.openModal(UI.newClientModal());},
     createClient:function(){var company=document.getElementById('new-company').value.trim(),owner=document.getElementById('new-owner').value.trim(),email=document.getElementById('new-email').value.trim();if(!company||!owner||!email){U.toast('Company, owner, and email are required');return;}var payload={company:company,name:owner,approvalOwner:owner,email:email,approvalNote:document.getElementById('new-note').value.trim(),color:document.getElementById('new-color').value};run(function(){return API.createClient(payload);},'Client room created');U.closeModal();},
-    openPost:async function(id){try{var detail=await API.getPostDetail(id);U.openModal(UI.postModal(detail,state.data));}catch(e){U.toast(e.message);}},
+    openPost:async function(id){try{var detail=await API.getPostDetail(id);U.openModal(UI.postModal(detail,state.data));var n=detail.notes||{};if(n.added)U.toast(n.added+' new Buffer note'+(n.added===1?'':'s')+' on this post');if(n.needScope||n.error||n.pushError||n.pushed||n.noToken)noteMessages({notesNeedScope:n.needScope,notesError:n.error,notesPushError:n.pushError,notesPushed:n.pushed,notesNoToken:n.noToken},false);}catch(e){U.toast(e.message);}},
     assign:function(postId,clientId){run(function(){return API.assignPost(postId,clientId||null);},clientId?'Client assigned':'Post unassigned');U.closeModal();},
     saveAssignment:function(postId){
       var el=document.getElementById('post-client'),clientId=el?el.value:'';

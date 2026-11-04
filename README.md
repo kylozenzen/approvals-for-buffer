@@ -86,7 +86,7 @@ openssl rand -base64 48
 Optional:
 
 - `BUFFER_OAUTH_CLIENT_ID` to turn on **Connect with Buffer** (see below)
-- `BUFFER_OAUTH_SCOPE` to override the requested scopes (default `posts:read posts:write account:read offline_access`)
+- `BUFFER_OAUTH_SCOPE` to override the requested scopes (default `posts:read posts:write account:read notes:read notes:write offline_access`)
 - `BUFFER_ORGANIZATION_ID` when the account belongs to multiple Buffer organizations
 - `RESEND_API_KEY`
 - `RESEND_FROM`
@@ -101,7 +101,7 @@ Receipts picks a Buffer token in this order: a key pasted in the current tab →
 2. Put its client ID in `BUFFER_OAUTH_CLIENT_ID` and redeploy. If Buffer issued your app a client secret, add it as `BUFFER_OAUTH_CLIENT_SECRET`; PKCE apps don't need one.
 3. Run migration 003.
 
-The browser starts the PKCE flow; the Netlify function exchanges the code, encrypts the access and refresh tokens with `RECEIPTS_ENCRYPTION_SECRET`, and stores them in `buffer_connections` (no browser or anon access). Expiring tokens refresh server-side. If a refresh fails, Settings shows **Reconnect Buffer**. `posts:write` is requested now so that writing client comments back to Buffer notes will not need a reconnect later; drop it via `BUFFER_OAUTH_SCOPE` if you want read-only for now.
+The browser starts the PKCE flow; the Netlify function exchanges the code, encrypts the access and refresh tokens with `RECEIPTS_ENCRYPTION_SECRET`, and stores them in `buffer_connections` (no browser or anon access). Expiring tokens refresh server-side. If a refresh fails, Settings shows **Reconnect Buffer**. The `notes:read` and `notes:write` scopes power the Buffer Notes sync below.
 
 **Pasted API key:** each tester signs in, pastes their own Buffer API key in Settings, and syncs only their own Buffer content into approval rooms. The key is held only in page memory for the current tab/session; it is not written to `localStorage`, Supabase, or Receipts records. It is sent in the request header solely to perform the read-only Buffer sync, then must be pasted again after a refresh.
 
@@ -109,13 +109,13 @@ The browser starts the PKCE flow; the Netlify function exchanges the code, encry
 
 Never commit a real Buffer key.
 
-### 5. Buffer notes
+### 5. Buffer Notes (both directions)
 
-Every sync also reads the notes your team writes on a post inside Buffer and mirrors them into that post's thread in Receipts, tagged **Buffer note**. Edits in Buffer update the note and deleted notes disappear on the next sync.
+Receipts uses Buffer's Notes API (`collaborationNotes`, `createCollaborationNote`). It is experimental on Buffer's side and needs the `notes:read` and `notes:write` scopes. **Existing keys and tokens do not get Notes access automatically:** make a new Buffer API key with Notes enabled, or reconnect Buffer in Settings.
 
-Buffer notes are internal by default: only the creator sees them. Use **Share with client** on a note to show it in the client's approval room (labelled *From the team*). Notes never change the approval fingerprint, so adding a note does not reset an approval.
-
-If Buffer ever rejects the notes field, sync carries on without notes instead of failing. Until migration 003 runs, posts still sync and the app shows a reminder to apply it.
+- **Buffer → Receipts:** each sync reads the Notes thread on every post that is already in a client room and mirrors it into that post's thread, tagged **Buffer note**. Edits and deletions in Buffer carry over. Buffer notes are internal by default; **Share with client** shows one in the room as *From the team*.
+- **Receipts → Buffer:** when a client comments, requests changes, or stamps approval, Receipts adds a Note to the Buffer post, e.g. *"James (Coffee Chaz) commented in Receipts: …"*. This uses the creator's Buffer connection (or `BUFFER_API_KEY`); a key pasted for one browser session isn't available to client rooms. Notes Receipts wrote are never pulled back in as duplicates.
+- Notes never change the approval fingerprint. If the token lacks Notes scopes, posts still sync and the app says what to fix. Buffer failing never blocks a client's comment.
 
 ## Approval integrity
 

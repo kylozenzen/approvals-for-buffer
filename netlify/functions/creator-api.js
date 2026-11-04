@@ -12,7 +12,7 @@ function titleFromCaption(value){const clean=String(value||'').replace(/\s+/g,' 
 function publicBase(event){return (process.env.APP_BASE_URL||((event.headers['x-forwarded-proto']||'https')+'://'+event.headers.host)).replace(/\/$/,'');}
 function mapClient(row){let roomToken='',approvalCode='';try{roomToken=C.decrypt(row.room_token_ciphertext);}catch(e){}try{approvalCode=C.decrypt(row.approval_code_ciphertext);}catch(e){}return {id:row.id,name:row.contact_name,company:row.company,email:row.email,approvalOwner:row.approval_owner,approvalNote:row.approval_note||'',roomToken,approvalCode,color:row.color||'#cafd00',colorText:row.color_text||'#0d0f0c',initials:row.initials||'',active:row.active!==false,approvalLockedUntil:row.approval_locked_until||null,roomTokenExpiresAt:row.room_token_expires_at||null};}
 function mapItem(row){return {id:row.id,bufferId:row.buffer_post_id,clientId:row.client_id,title:row.title,caption:row.caption||'',image:row.image_url||'',platform:row.platform||'Buffer',service:row.service||'',channelId:row.channel_id||'',status:row.status||'draft',bufferStatus:row.buffer_status||'draft',dueAt:row.due_at,version:row.version||1,changedSinceReview:Boolean(row.changed_since_review),approvedBy:row.approved_by,approvedAt:row.approved_at,receiptCode:row.receipt_code,currentFingerprint:row.current_fingerprint,createdAt:row.source_created_at||row.created_at,updatedAt:row.updated_at};}
-function mapComment(row){return {id:row.id,authorType:row.author_type,authorName:row.author_name,body:row.body,kind:row.kind,source:row.source||'receipts',clientVisible:row.client_visible!==false,createdAt:row.created_at};}
+function mapComment(row){return {id:row.id,authorType:row.author_type,authorName:row.author_name,body:row.body,kind:row.kind,source:row.source||'receipts',clientVisible:row.client_visible!==false,inBuffer:Boolean(row.buffer_note_id)&&row.source!=='buffer',createdAt:row.created_at};}
 function mapReceipt(row){return {id:row.id,receiptCode:row.receipt_code,postId:row.content_item_id,clientId:row.client_id,clientCompany:row.client_company,title:row.title,platform:row.platform,approverName:row.approver_name,approvedAt:row.approved_at,version:row.version,fingerprint:row.fingerprint,snapshot:row.snapshot_json||{}};}
 async function ownItem(userId,id){return db.one('content_items','select=*&id=eq.'+q(id)+'&user_id=eq.'+q(userId));}
 async function ownClient(userId,id){return db.one('clients','select=*&id=eq.'+q(id)+'&user_id=eq.'+q(userId));}
@@ -61,7 +61,15 @@ async function assignAndSendForReview(user,p){
   return {post:mapItem(rows[0]),client:mapClient(client)};
 }
 async function addCreatorComment(user,p){const item=await ownItem(user.id,p.postId);if(!item)throw Object.assign(new Error('Post not found.'),{statusCode:404});if(!String(p.body||'').trim())throw Object.assign(new Error('Comment cannot be empty.'),{statusCode:400});await db.insert('comments',{content_item_id:item.id,user_id:user.id,snapshot_id:item.review_snapshot_id||item.latest_snapshot_id,author_type:'creator',author_name:user.email||'Creator',body:String(p.body).trim(),kind:'comment'});return {ok:true};}
-async function postDetail(user,p){const item=await ownItem(user.id,p.postId);if(!item)throw Object.assign(new Error('Post not found.'),{statusCode:404});const [client,comments]=await Promise.all([item.client_id?ownClient(user.id,item.client_id):Promise.resolve(null),db.select('comments','select=*&content_item_id=eq.'+q(item.id)+'&order=created_at.asc')]);return {post:mapItem(item),client:client?mapClient(client):null,comments:(comments||[]).map(mapComment)};}
+async function refreshItemNotes(user,item,event){
+  if(!item.client_id||!item.buffer_post_id)return {};
+  try{
+    const {token}=await resolveBufferToken(user,event);
+    if(!token)return {notesNoToken:true};
+    return await syncNotes(user,token,[{itemId:item.id,postId:item.buffer_post_id,clientId:item.client_id,snapshotId:item.review_snapshot_id||item.latest_snapshot_id}]);
+  }catch(e){return {notesError:e.message};}
+}
+async function postDetail(user,p,event){const item=await ownItem(user.id,p.postId);if(!item)throw Object.assign(new Error('Post not found.'),{statusCode:404});const notes=await refreshItemNotes(user,item,event);const [client,comments]=await Promise.all([item.client_id?ownClient(user.id,item.client_id):Promise.resolve(null),db.select('comments','select=*&content_item_id=eq.'+q(item.id)+'&order=created_at.asc')]);return {notes:{added:notes.notesAdded||0,pushed:notes.notesPushed||0,error:notes.notesError||null,pushError:notes.notesPushError||null,needScope:Boolean(notes.notesNeedScope),noToken:Boolean(notes.notesNoToken)},post:mapItem(item),client:client?mapClient(client):null,comments:(comments||[]).map(mapComment)};}
 function snapshotFromBuffer(post){return {bufferPostId:post.bufferId,caption:post.caption||'',imageUrl:post.image||'',assets:Array.isArray(post.assets)?post.assets:[],platform:post.platform||'Buffer',service:post.service||'',channelId:post.channelId||'',bufferStatus:post.bufferStatus||'draft',dueAt:post.dueAt||null};}
 async function selectBufferOrganization(user,p){if(!String(p.organizationId||'').trim())throw Object.assign(new Error('Choose a Buffer organization.'),{statusCode:400});await db.update('profiles','id=eq.'+q(user.id),{buffer_organization_id:String(p.organizationId).trim()});return {ok:true};}
 // Which Buffer token to use, in priority order:
@@ -76,36 +84,101 @@ async function resolveBufferToken(user,event){
 }
 async function pullBufferPosts(user,event,orgId){
   const resolved=await resolveBufferToken(user,event);
-  try{return await BufferAPI.getPosts(resolved.token,orgId);}
+  try{return {pulled:await BufferAPI.getPosts(resolved.token,orgId),token:resolved.token,source:resolved.source};}
   catch(e){
     // An OAuth access token can be revoked or expire early: refresh once and retry.
     if(resolved.source!=='oauth'||e.bufferStatus!==401)throw e;
-    return BufferAPI.getPosts(await BufferOAuth.accessToken(user.id,true),orgId);
+    const token=await BufferOAuth.accessToken(user.id,true);
+    return {pulled:await BufferAPI.getPosts(token,orgId),token,source:'oauth'};
   }
 }
 function noteRow(user,target,note){
   return {content_item_id:target.itemId,user_id:user.id,snapshot_id:target.snapshotId||null,author_type:'buffer',author_name:String(note.authorName||'Buffer teammate').slice(0,80),body:String(note.text).slice(0,4000),kind:'note',source:'buffer',buffer_note_id:note.id,client_visible:false,external_updated_at:note.updatedAt||null,created_at:note.createdAt||new Date().toISOString()};
 }
-// Mirrors each synced post's Buffer notes into its comment thread: new notes are
-// added (hidden from the client room), edited notes are updated, deleted notes removed.
-async function syncNotes(user,pulled,targets){
-  const out={notesAdded:0,notesUpdated:0,notesRemoved:0,notesAvailable:Boolean(pulled.notesAvailable)};
-  if(!pulled.notesAvailable||!targets.length)return out;
+// Runs fn over items with at most `limit` in flight, so a sync stays inside the
+// function time limit without bursting Buffer's rate limit.
+async function eachLimited(items,limit,fn){
+  let next=0;
+  const workers=Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;await fn(items[i],i);}});
+  await Promise.all(workers);
+}
+function clientNoteText(row,company){
+  const who=row.author_name+(company?' ('+company+')':'');
+  if(row.kind==='change')return who+' requested changes in Receipts: '+row.body;
+  if(row.kind==='approval')return who+' approved this post in Receipts.';
+  return who+' commented in Receipts: '+row.body;
+}
+// Copies client comments, change requests and approvals that haven't reached Buffer
+// yet onto the Buffer post as Notes, using the creator's own Buffer access. This
+// catches up anything the client room couldn't send (e.g. no server-side key).
+async function pushPendingToBuffer(user,token,targets){
+  const out={notesPushed:0};
+  let pending;
+  try{pending=await db.select('comments','select=id,content_item_id,author_name,body,kind&user_id=eq.'+q(user.id)+'&author_type=eq.client&buffer_note_id=is.null&content_item_id=in.('+targets.map(t=>t.itemId).join(',')+')&order=created_at.asc');}
+  catch(e){return out;}
+  if(!pending||!pending.length)return out;
+  const byItem={};targets.forEach(t=>{byItem[t.itemId]=t;});
+  const companies={};
+  const clientIds=[...new Set(targets.map(t=>t.clientId).filter(Boolean))];
+  if(clientIds.length){try{(await db.select('clients','select=id,company&user_id=eq.'+q(user.id)+'&id=in.('+clientIds.join(',')+')')||[]).forEach(c=>{companies[c.id]=c.company;});}catch(e){}}
+  for(const row of pending){
+    const target=byItem[row.content_item_id];
+    if(!target)continue;
+    try{
+      const note=await BufferAPI.createPostNote(token,target.postId,clientNoteText(row,companies[target.clientId]));
+      if(note.id)await db.update('comments','id=eq.'+q(row.id)+'&user_id=eq.'+q(user.id),{buffer_note_id:note.id});
+      out.notesPushed++;
+    }catch(e){
+      if(BufferAPI.isScopeError(e)){out.notesNeedScope=true;break;}
+      out.notesPushFailed=(out.notesPushFailed||0)+1;
+      if(!out.notesPushError)out.notesPushError=e.message||'Buffer did not save the note.';
+      console.warn('[Receipts] Could not copy client comment to Buffer:',e.message);
+    }
+  }
+  return out;
+}
+// Mirrors each client-assigned post's Buffer Notes thread into Receipts: new notes
+// are added (hidden from the client room), edited notes updated, deleted notes
+// removed. Notes Receipts itself wrote to Buffer are recognised and skipped.
+async function syncNotes(user,token,targets){
+  const out={notesAdded:0,notesUpdated:0,notesRemoved:0,notesAvailable:true,notesChecked:targets.length};
+  if(!token||!targets.length)return out;
+  const pushed=await pushPendingToBuffer(user,token,targets);
+  Object.assign(out,pushed);
+  if(pushed.notesNeedScope){out.notesAvailable=false;return out;}
   let existing;
-  try{existing=await db.select('comments','select=id,content_item_id,buffer_note_id,body,author_name,external_updated_at&source=eq.buffer&user_id=eq.'+q(user.id)+'&content_item_id=in.('+targets.map(t=>t.itemId).join(',')+')');}
+  try{existing=await db.select('comments','select=id,content_item_id,buffer_note_id,source,body,author_name&user_id=eq.'+q(user.id)+'&buffer_note_id=not.is.null&content_item_id=in.('+targets.map(t=>t.itemId).join(',')+')');}
   catch(e){console.warn('[Receipts] Skipping Buffer notes (run migration 003):',e.message);out.notesAvailable=false;out.notesNeedMigration=true;return out;}
-  const byItem={};
-  (existing||[]).forEach(row=>{(byItem[row.content_item_id]||(byItem[row.content_item_id]={}))[row.buffer_note_id]=row;});
+  const fetched={};let scopeError=false;
+  await eachLimited(targets,4,async target=>{
+    if(scopeError)return;
+    try{fetched[target.itemId]=await BufferAPI.listPostNotes(token,target.postId);}
+    catch(e){
+      if(BufferAPI.isScopeError(e)){scopeError=true;return;}
+      console.warn('[Receipts] Could not read Buffer notes for post',target.postId,e.message);
+      out.notesFailed=(out.notesFailed||0)+1;
+      if(!out.notesError)out.notesError=e.message||'Buffer did not return the notes.';
+    }
+  });
+  if(scopeError){out.notesAvailable=false;out.notesNeedScope=true;return out;}
+  const byItem={},mirrored=new Set();
+  (existing||[]).forEach(row=>{
+    if(row.source!=='buffer'){mirrored.add(row.buffer_note_id);return;}
+    (byItem[row.content_item_id]||(byItem[row.content_item_id]={}))[row.buffer_note_id]=row;
+  });
   const inserts=[],removals=[];
   for(const target of targets){
+    const notes=fetched[target.itemId];
+    if(!notes)continue; // read failed: leave this post's saved notes untouched
     const saved=byItem[target.itemId]||{},current=new Set();
-    for(const note of target.notes){
+    for(const note of notes){
+      if(mirrored.has(note.id))continue;
       current.add(note.id);
       const row=saved[note.id];
       if(!row){inserts.push(noteRow(user,target,note));continue;}
-      const body=String(note.text).slice(0,4000);
-      if(row.body!==body||row.author_name!==note.authorName){
-        await db.update('comments','id=eq.'+q(row.id)+'&user_id=eq.'+q(user.id),{body,author_name:String(note.authorName||'Buffer teammate').slice(0,80),external_updated_at:note.updatedAt||null});
+      const body=String(note.text).slice(0,4000),author=String(note.authorName||'Buffer teammate').slice(0,80);
+      if(row.body!==body||row.author_name!==author){
+        await db.update('comments','id=eq.'+q(row.id)+'&user_id=eq.'+q(user.id),{body,author_name:author,external_updated_at:note.updatedAt||null});
         out.notesUpdated++;
       }
     }
@@ -117,7 +190,7 @@ async function syncNotes(user,pulled,targets){
 }
 async function syncBuffer(user,event){
   const profile=await db.one('profiles','select=buffer_organization_id&id=eq.'+q(user.id));
-  const pulled=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id);
+  const {pulled,token}=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id);
   let added=0,updated=0,changed=0;const noteTargets=[];
   for(const post of pulled.posts){
     const snap=snapshotFromBuffer(post),fp=C.fingerprint(snap);
@@ -127,7 +200,6 @@ async function syncBuffer(user,event){
       const item=inserted[0];
       const snapshots=await db.insert('content_snapshots',{content_item_id:item.id,user_id:user.id,version:1,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});
       await db.update('content_items','id=eq.'+q(item.id),{latest_snapshot_id:snapshots[0].id});
-      noteTargets.push({itemId:item.id,snapshotId:snapshots[0].id,notes:post.notes||[]});
       added++;continue;
     }
     if(existing.current_fingerprint!==fp){
@@ -135,15 +207,16 @@ async function syncBuffer(user,event){
       const snapshots=await db.insert('content_snapshots',{content_item_id:existing.id,user_id:user.id,version,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});
       const hadReview=Boolean(existing.review_snapshot_id);
       await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{title:titleFromCaption(post.caption),caption:post.caption||'',image_url:post.image||'',platform:post.platform||'Buffer',service:post.service||'',channel_id:post.channelId||'',buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,version,current_fingerprint:fp,latest_snapshot_id:snapshots[0].id,status:hadReview?'draft':existing.status,changed_since_review:hadReview,approved_by:null,approved_at:null,receipt_code:null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});
-      noteTargets.push({itemId:existing.id,snapshotId:snapshots[0].id,notes:post.notes||[]});
+      if(existing.client_id)noteTargets.push({itemId:existing.id,postId:post.bufferId,clientId:existing.client_id,snapshotId:snapshots[0].id});
       changed++;updated++;
     }else{
       await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});
-      noteTargets.push({itemId:existing.id,snapshotId:existing.review_snapshot_id||existing.latest_snapshot_id,notes:post.notes||[]});
+      if(existing.client_id)noteTargets.push({itemId:existing.id,postId:post.bufferId,clientId:existing.client_id,snapshotId:existing.review_snapshot_id||existing.latest_snapshot_id});
       updated++;
     }
   }
-  const notes=await syncNotes(user,pulled,noteTargets);
+  // Notes are read only for posts already in a client room, to keep sync fast and within rate limits.
+  const notes=await syncNotes(user,token,noteTargets);
   return Object.assign({added,updated,changed,organization:pulled.organization,organizationCount:pulled.organizationCount||0,organizations:pulled.organizations||[],truncated:Boolean(pulled.truncated)},notes);
 }
 async function setNoteVisibility(user,p){
@@ -157,4 +230,4 @@ async function disconnectBuffer(user){return {buffer:await BufferOAuth.disconnec
 async function resendApprovalEmail(user,p){const receipt=await db.one('receipts','select=*&id=eq.'+q(p.receiptId)+'&user_id=eq.'+q(user.id));if(!receipt)throw Object.assign(new Error('Receipt not found.'),{statusCode:404});const client=await ownClient(user.id,receipt.client_id);if(!client)throw Object.assign(new Error('Client not found.'),{statusCode:404});return Mail.sendEmail({to:Mail.uniqueRecipients([client.email,user.email]),subject:receipt.receipt_code+' — '+receipt.title+' approved',html:'<p>'+receipt.approver_name+' approved '+receipt.title+' for '+client.company+'. Receipt: '+receipt.receipt_code+'.</p>'});}
 async function inviteClient(user,p,event){const client=await ownClient(user.id,p.clientId);if(!client)throw Object.assign(new Error('Client not found.'),{statusCode:404});const room=C.decrypt(client.room_token_ciphertext),code=C.decrypt(client.approval_code_ciphertext),url=publicBase(event)+'/review/'+encodeURIComponent(room);const result=await Mail.sendEmail({to:client.email,subject:'Your '+client.company+' approval room',html:'<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto"><h1>Content is ready for review</h1><p>Open the approval room to comment, request changes, or stamp final approval.</p><p><a href="'+url+'" style="display:inline-block;background:#cafd00;color:#354600;padding:12px 18px;border-radius:999px;text-decoration:none;font-weight:700">Open approval room</a></p><p><strong>Owner code:</strong> '+code+'</p><p style="color:#777;font-size:12px">The team can comment. The code holder can grant final approval.</p></div>'});return Object.assign(result,{preview:'Approval room: '+url+'\nOwner code: '+code});}
 
-exports.handler=async function(event){const opt=H.options(event);if(opt)return opt;if(!H.originAllowed(event))return H.json(403,{error:'Origin is not allowed.'});if(event.httpMethod!=='POST')return H.json(405,{error:'POST required.'});try{const user=await auth.userFromEvent(event);const body=H.parse(event),action=body.action,p=body.payload||{};let out;if(action==='bootstrap')out=await bootstrap(user);else if(action==='createClient')out=await createClient(user,p);else if(action==='rotateClientSecret')out=await rotateClientSecret(user,p);else if(action==='updateRoomControls')out=await updateRoomControls(user,p);else if(action==='assignPost')out=await assignPost(user,p);else if(action==='sendForReview')out=await sendForReview(user,p);else if(action==='assignAndSendForReview')out=await assignAndSendForReview(user,p);else if(action==='addCreatorComment')out=await addCreatorComment(user,p);else if(action==='postDetail')out=await postDetail(user,p);else if(action==='syncBuffer')out=await syncBuffer(user,event);else if(action==='connectBuffer')out=await connectBuffer(user,p,event);else if(action==='disconnectBuffer')out=await disconnectBuffer(user);else if(action==='setNoteVisibility')out=await setNoteVisibility(user,p);else if(action==='selectBufferOrganization')out=await selectBufferOrganization(user,p);else if(action==='inviteClient')out=await inviteClient(user,p,event);else if(action==='resendApprovalEmail')out=await resendApprovalEmail(user,p);else throw Object.assign(new Error('Unknown creator action.'),{statusCode:400});return H.json(200,out);}catch(e){return H.fail(e);}};
+exports.handler=async function(event){const opt=H.options(event);if(opt)return opt;if(!H.originAllowed(event))return H.json(403,{error:'Origin is not allowed.'});if(event.httpMethod!=='POST')return H.json(405,{error:'POST required.'});try{const user=await auth.userFromEvent(event);const body=H.parse(event),action=body.action,p=body.payload||{};let out;if(action==='bootstrap')out=await bootstrap(user);else if(action==='createClient')out=await createClient(user,p);else if(action==='rotateClientSecret')out=await rotateClientSecret(user,p);else if(action==='updateRoomControls')out=await updateRoomControls(user,p);else if(action==='assignPost')out=await assignPost(user,p);else if(action==='sendForReview')out=await sendForReview(user,p);else if(action==='assignAndSendForReview')out=await assignAndSendForReview(user,p);else if(action==='addCreatorComment')out=await addCreatorComment(user,p);else if(action==='postDetail')out=await postDetail(user,p,event);else if(action==='syncBuffer')out=await syncBuffer(user,event);else if(action==='connectBuffer')out=await connectBuffer(user,p,event);else if(action==='disconnectBuffer')out=await disconnectBuffer(user);else if(action==='setNoteVisibility')out=await setNoteVisibility(user,p);else if(action==='selectBufferOrganization')out=await selectBufferOrganization(user,p);else if(action==='inviteClient')out=await inviteClient(user,p,event);else if(action==='resendApprovalEmail')out=await resendApprovalEmail(user,p);else throw Object.assign(new Error('Unknown creator action.'),{statusCode:400});return H.json(200,out);}catch(e){return H.fail(e);}};
