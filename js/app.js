@@ -47,6 +47,9 @@
     if(out.notesNeedMigration)U.toast('Buffer notes need Supabase migration 003 before they can sync.');
     if(out.notesNeedScope)U.toast(bufferConnected()?'Reconnect Buffer in Settings to allow Notes.':'Your Buffer key needs Notes access (notes:read and notes:write). Make a new key with Notes enabled.');
     if(out.notesError){var msg='Buffer Notes could not be read: '+out.notesError;if(!quiet||msg!==lastNoteError)U.toast(msg);lastNoteError=msg;}
+    if(out.notesPushError){var pmsg='Could not add client comments to Buffer: '+out.notesPushError;if(!quiet||pmsg!==lastNoteError)U.toast(pmsg);lastNoteError=pmsg;}
+    if(out.notesPushed)U.toast(out.notesPushed+' client comment'+(out.notesPushed===1?'':'s')+' added to Buffer');
+    if(out.notesNoToken&&!quiet)U.toast('Receipts can\'t reach Buffer in this tab. Paste your Buffer key (with Notes access) or connect Buffer in Settings.');
   }
   // quiet: background sync on load, on a timer, and when the tab regains focus.
   // It only speaks up when something new arrived or something needs fixing.
@@ -128,7 +131,7 @@
     },
     newClient:function(){U.openModal(UI.newClientModal());},
     createClient:function(){var company=document.getElementById('new-company').value.trim(),owner=document.getElementById('new-owner').value.trim(),email=document.getElementById('new-email').value.trim();if(!company||!owner||!email){U.toast('Company, owner, and email are required');return;}var payload={company:company,name:owner,approvalOwner:owner,email:email,approvalNote:document.getElementById('new-note').value.trim(),color:document.getElementById('new-color').value};run(function(){return API.createClient(payload);},'Client room created');U.closeModal();},
-    openPost:async function(id){try{var detail=await API.getPostDetail(id);U.openModal(UI.postModal(detail,state.data));var n=detail.notes||{};if(n.added)U.toast(n.added+' new Buffer note'+(n.added===1?'':'s')+' on this post');if(n.needScope||n.error)noteMessages({notesNeedScope:n.needScope,notesError:n.error},false);}catch(e){U.toast(e.message);}},
+    openPost:async function(id){try{var detail=await API.getPostDetail(id);U.openModal(UI.postModal(detail,state.data));var n=detail.notes||{};if(n.added)U.toast(n.added+' new Buffer note'+(n.added===1?'':'s')+' on this post');if(n.needScope||n.error||n.pushError||n.pushed||n.noToken)noteMessages({notesNeedScope:n.needScope,notesError:n.error,notesPushError:n.pushError,notesPushed:n.pushed,notesNoToken:n.noToken},false);}catch(e){U.toast(e.message);}},
     assign:function(postId,clientId){run(function(){return API.assignPost(postId,clientId||null);},clientId?'Client assigned':'Post unassigned');U.closeModal();},
     saveAssignment:function(postId){
       var el=document.getElementById('post-client'),clientId=el?el.value:'';

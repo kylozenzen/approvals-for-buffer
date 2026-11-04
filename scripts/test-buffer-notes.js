@@ -47,7 +47,7 @@ async function adapterTests(){
   await assert.rejects(()=>BufferAPI.listPostNotes('tok','p'),err=>BufferAPI.isScopeError(err));
 }
 
-function syncHarness(listImpl){
+function syncHarness(listImpl,pendingRows,createImpl){
   const calls={insert:[],update:[],remove:[],listed:[]};
   const items={
     buf_assigned:{id:'item_1',user_id:'user_1',client_id:'client_1',version:1,latest_snapshot_id:'snap_1',review_snapshot_id:'snap_1',status:'review'},
@@ -67,11 +67,12 @@ function syncHarness(listImpl){
   stub('_lib/buffer.js',{
     getPosts:async()=>({organization:{id:'org'},organizations:[],posts:[post('buf_assigned'),post('buf_unassigned')]}),
     listPostNotes:async(token,postId)=>{calls.listed.push(postId);return listImpl(postId);},
+    createPostNote:async(token,postId,text)=>{calls.created=(calls.created||[]).concat([{token,postId,text}]);return createImpl?createImpl(text):{id:'pushed_'+(calls.created.length)};},
     isScopeError:e=>e&&e.code==='INSUFFICIENT_SCOPE'
   });
   stub('_lib/supabase.js',{
     one:async(table,query)=>{if(table==='profiles')return {buffer_organization_id:''};if(table==='content_items'){const id=decodeURIComponent(query.match(/buffer_post_id=eq\.([^&]+)/)[1]);return Object.assign({current_fingerprint:fp(id)},items[id]);}return null;},
-    select:async(table,query)=>{if(table==='comments'&&/buffer_note_id=not.is.null/.test(query))return saved;return [];},
+    select:async(table,query)=>{if(table==='comments'&&/buffer_note_id=not.is.null/.test(query))return saved;if(table==='comments'&&/author_type=eq.client/.test(query))return pendingRows||[];if(table==='clients')return [{id:'client_1',company:'Coffee Chaz'}];return [];},
     insert:async(table,body)=>{calls.insert.push({table,body});return Array.isArray(body)?body:[Object.assign({id:'new_'+table},body)];},
     update:async(table,query,body)=>{calls.update.push({table,query,body});return [body];},
     remove:async(table,query)=>{calls.remove.push({table,query});},
@@ -132,6 +133,22 @@ async function syncTests(){
   assert.equal(res.statusCode,200,res.body);
   assert.deepEqual(calls.listed,['buf_assigned']);
   assert.equal(JSON.parse(res.body).notes.added,1);
+}
+
+async function pushPendingTests(){
+  // Client comments the room couldn't send are added to Buffer from the creator side.
+  let calls=syncHarness(()=>[],[{id:'cm_1',content_item_id:'item_1',author_name:'coffee',body:'cheese',kind:'comment'},{id:'cm_2',content_item_id:'item_1',author_name:'coffee',body:'Hours are wrong',kind:'change'}]);
+  let out=await runSync();
+  assert.equal(out.notesPushed,2);
+  assert.deepEqual(calls.created.map(c=>c.text),['coffee (Coffee Chaz) commented in Receipts: cheese','coffee (Coffee Chaz) requested changes in Receipts: Hours are wrong']);
+  assert.equal(calls.created[0].token,'key_with_notes','uses the creator\'s own Buffer access');
+  assert.equal(calls.created[0].postId,'buf_assigned');
+  assert.deepEqual(calls.update.filter(u=>u.table==='comments'&&u.body.buffer_note_id).map(u=>u.body.buffer_note_id),['pushed_1','pushed_2']);
+
+  // A Buffer refusal is reported, not swallowed.
+  calls=syncHarness(()=>[],[{id:'cm_1',content_item_id:'item_1',author_name:'coffee',body:'cheese',kind:'comment'}],()=>{throw new Error('Thread is closed');});
+  out=await runSync();
+  assert.equal(out.notesPushError,'Thread is closed');
 }
 
 async function writeBackTests(){
@@ -210,6 +227,7 @@ async function demoTests(){
 (async function main(){
   await adapterTests();
   await syncTests();
+  await pushPendingTests();
   await writeBackTests();
   await roomVisibilityTests();
   await demoTests();

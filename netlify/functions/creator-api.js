@@ -65,11 +65,11 @@ async function refreshItemNotes(user,item,event){
   if(!item.client_id||!item.buffer_post_id)return {};
   try{
     const {token}=await resolveBufferToken(user,event);
-    if(!token)return {};
-    return await syncNotes(user,token,[{itemId:item.id,postId:item.buffer_post_id,snapshotId:item.review_snapshot_id||item.latest_snapshot_id}]);
+    if(!token)return {notesNoToken:true};
+    return await syncNotes(user,token,[{itemId:item.id,postId:item.buffer_post_id,clientId:item.client_id,snapshotId:item.review_snapshot_id||item.latest_snapshot_id}]);
   }catch(e){return {notesError:e.message};}
 }
-async function postDetail(user,p,event){const item=await ownItem(user.id,p.postId);if(!item)throw Object.assign(new Error('Post not found.'),{statusCode:404});const notes=await refreshItemNotes(user,item,event);const [client,comments]=await Promise.all([item.client_id?ownClient(user.id,item.client_id):Promise.resolve(null),db.select('comments','select=*&content_item_id=eq.'+q(item.id)+'&order=created_at.asc')]);return {notes:{added:notes.notesAdded||0,error:notes.notesError||null,needScope:Boolean(notes.notesNeedScope)},post:mapItem(item),client:client?mapClient(client):null,comments:(comments||[]).map(mapComment)};}
+async function postDetail(user,p,event){const item=await ownItem(user.id,p.postId);if(!item)throw Object.assign(new Error('Post not found.'),{statusCode:404});const notes=await refreshItemNotes(user,item,event);const [client,comments]=await Promise.all([item.client_id?ownClient(user.id,item.client_id):Promise.resolve(null),db.select('comments','select=*&content_item_id=eq.'+q(item.id)+'&order=created_at.asc')]);return {notes:{added:notes.notesAdded||0,pushed:notes.notesPushed||0,error:notes.notesError||null,pushError:notes.notesPushError||null,needScope:Boolean(notes.notesNeedScope),noToken:Boolean(notes.notesNoToken)},post:mapItem(item),client:client?mapClient(client):null,comments:(comments||[]).map(mapComment)};}
 function snapshotFromBuffer(post){return {bufferPostId:post.bufferId,caption:post.caption||'',imageUrl:post.image||'',assets:Array.isArray(post.assets)?post.assets:[],platform:post.platform||'Buffer',service:post.service||'',channelId:post.channelId||'',bufferStatus:post.bufferStatus||'draft',dueAt:post.dueAt||null};}
 async function selectBufferOrganization(user,p){if(!String(p.organizationId||'').trim())throw Object.assign(new Error('Choose a Buffer organization.'),{statusCode:400});await db.update('profiles','id=eq.'+q(user.id),{buffer_organization_id:String(p.organizationId).trim()});return {ok:true};}
 // Which Buffer token to use, in priority order:
@@ -102,12 +102,50 @@ async function eachLimited(items,limit,fn){
   const workers=Array.from({length:Math.min(limit,items.length)},async()=>{while(next<items.length){const i=next++;await fn(items[i],i);}});
   await Promise.all(workers);
 }
+function clientNoteText(row,company){
+  const who=row.author_name+(company?' ('+company+')':'');
+  if(row.kind==='change')return who+' requested changes in Receipts: '+row.body;
+  if(row.kind==='approval')return who+' approved this post in Receipts.';
+  return who+' commented in Receipts: '+row.body;
+}
+// Copies client comments, change requests and approvals that haven't reached Buffer
+// yet onto the Buffer post as Notes, using the creator's own Buffer access. This
+// catches up anything the client room couldn't send (e.g. no server-side key).
+async function pushPendingToBuffer(user,token,targets){
+  const out={notesPushed:0};
+  let pending;
+  try{pending=await db.select('comments','select=id,content_item_id,author_name,body,kind&user_id=eq.'+q(user.id)+'&author_type=eq.client&buffer_note_id=is.null&content_item_id=in.('+targets.map(t=>t.itemId).join(',')+')&order=created_at.asc');}
+  catch(e){return out;}
+  if(!pending||!pending.length)return out;
+  const byItem={};targets.forEach(t=>{byItem[t.itemId]=t;});
+  const companies={};
+  const clientIds=[...new Set(targets.map(t=>t.clientId).filter(Boolean))];
+  if(clientIds.length){try{(await db.select('clients','select=id,company&user_id=eq.'+q(user.id)+'&id=in.('+clientIds.join(',')+')')||[]).forEach(c=>{companies[c.id]=c.company;});}catch(e){}}
+  for(const row of pending){
+    const target=byItem[row.content_item_id];
+    if(!target)continue;
+    try{
+      const note=await BufferAPI.createPostNote(token,target.postId,clientNoteText(row,companies[target.clientId]));
+      if(note.id)await db.update('comments','id=eq.'+q(row.id)+'&user_id=eq.'+q(user.id),{buffer_note_id:note.id});
+      out.notesPushed++;
+    }catch(e){
+      if(BufferAPI.isScopeError(e)){out.notesNeedScope=true;break;}
+      out.notesPushFailed=(out.notesPushFailed||0)+1;
+      if(!out.notesPushError)out.notesPushError=e.message||'Buffer did not save the note.';
+      console.warn('[Receipts] Could not copy client comment to Buffer:',e.message);
+    }
+  }
+  return out;
+}
 // Mirrors each client-assigned post's Buffer Notes thread into Receipts: new notes
 // are added (hidden from the client room), edited notes updated, deleted notes
 // removed. Notes Receipts itself wrote to Buffer are recognised and skipped.
 async function syncNotes(user,token,targets){
   const out={notesAdded:0,notesUpdated:0,notesRemoved:0,notesAvailable:true,notesChecked:targets.length};
   if(!token||!targets.length)return out;
+  const pushed=await pushPendingToBuffer(user,token,targets);
+  Object.assign(out,pushed);
+  if(pushed.notesNeedScope){out.notesAvailable=false;return out;}
   let existing;
   try{existing=await db.select('comments','select=id,content_item_id,buffer_note_id,source,body,author_name&user_id=eq.'+q(user.id)+'&buffer_note_id=not.is.null&content_item_id=in.('+targets.map(t=>t.itemId).join(',')+')');}
   catch(e){console.warn('[Receipts] Skipping Buffer notes (run migration 003):',e.message);out.notesAvailable=false;out.notesNeedMigration=true;return out;}
@@ -169,11 +207,11 @@ async function syncBuffer(user,event){
       const snapshots=await db.insert('content_snapshots',{content_item_id:existing.id,user_id:user.id,version,caption:snap.caption,image_url:snap.imageUrl,platform:snap.platform,service:snap.service,channel_id:snap.channelId,buffer_status:snap.bufferStatus,due_at:snap.dueAt,fingerprint:fp,snapshot_json:snap});
       const hadReview=Boolean(existing.review_snapshot_id);
       await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{title:titleFromCaption(post.caption),caption:post.caption||'',image_url:post.image||'',platform:post.platform||'Buffer',service:post.service||'',channel_id:post.channelId||'',buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,version,current_fingerprint:fp,latest_snapshot_id:snapshots[0].id,status:hadReview?'draft':existing.status,changed_since_review:hadReview,approved_by:null,approved_at:null,receipt_code:null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});
-      if(existing.client_id)noteTargets.push({itemId:existing.id,postId:post.bufferId,snapshotId:snapshots[0].id});
+      if(existing.client_id)noteTargets.push({itemId:existing.id,postId:post.bufferId,clientId:existing.client_id,snapshotId:snapshots[0].id});
       changed++;updated++;
     }else{
       await db.update('content_items','id=eq.'+q(existing.id)+'&user_id=eq.'+q(user.id),{buffer_status:post.bufferStatus||'draft',due_at:post.dueAt||null,last_synced_at:new Date().toISOString(),updated_at:new Date().toISOString()});
-      if(existing.client_id)noteTargets.push({itemId:existing.id,postId:post.bufferId,snapshotId:existing.review_snapshot_id||existing.latest_snapshot_id});
+      if(existing.client_id)noteTargets.push({itemId:existing.id,postId:post.bufferId,clientId:existing.client_id,snapshotId:existing.review_snapshot_id||existing.latest_snapshot_id});
       updated++;
     }
   }
