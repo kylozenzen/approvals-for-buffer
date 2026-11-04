@@ -8,7 +8,11 @@ process.env.APP_BASE_URL='https://receipts.test';
 
 const functionsRoot=path.resolve(__dirname,'../netlify/functions');
 function stub(rel,exports){const file=require.resolve(path.join(functionsRoot,rel));require.cache[file]={id:file,filename:file,loaded:true,exports};}
-function fresh(rel){const file=require.resolve(path.join(functionsRoot,rel));delete require.cache[file];return require(file);}
+function fresh(rel){
+  // review-notes holds its own references to the db and Buffer modules, so reload it with each fresh API module.
+  delete require.cache[require.resolve(path.join(functionsRoot,'_lib/review-notes.js'))];
+  const file=require.resolve(path.join(functionsRoot,rel));delete require.cache[file];return require(file);
+}
 function reply(body){return {ok:true,status:200,text:async()=>JSON.stringify(body)};}
 
 async function adapterTests(){
@@ -47,10 +51,10 @@ async function adapterTests(){
   await assert.rejects(()=>BufferAPI.listPostNotes('tok','p'),err=>BufferAPI.isScopeError(err));
 }
 
-function syncHarness(listImpl,pendingRows,createImpl){
+function syncHarness(listImpl,pendingRows,createImpl,itemOverrides){
   const calls={insert:[],update:[],remove:[],listed:[]};
   const items={
-    buf_assigned:{id:'item_1',user_id:'user_1',client_id:'client_1',version:1,latest_snapshot_id:'snap_1',review_snapshot_id:'snap_1',status:'review'},
+    buf_assigned:Object.assign({id:'item_1',user_id:'user_1',client_id:'client_1',version:1,latest_snapshot_id:'snap_1',review_snapshot_id:'snap_1',status:'review'},itemOverrides||{}),
     buf_unassigned:{id:'item_2',user_id:'user_1',client_id:null,version:1,latest_snapshot_id:'snap_2',review_snapshot_id:null,status:'draft'}
   };
   const saved=[
@@ -68,11 +72,12 @@ function syncHarness(listImpl,pendingRows,createImpl){
     getPosts:async()=>({organization:{id:'org'},organizations:[],posts:[post('buf_assigned'),post('buf_unassigned')]}),
     listPostNotes:async(token,postId)=>{calls.listed.push(postId);return listImpl(postId);},
     createPostNote:async(token,postId,text)=>{calls.created=(calls.created||[]).concat([{token,postId,text}]);return createImpl?createImpl(text):{id:'pushed_'+(calls.created.length)};},
+    deletePostNote:async(token,noteId)=>{calls.deleted=(calls.deleted||[]).concat([noteId]);return true;},
     isScopeError:e=>e&&e.code==='INSUFFICIENT_SCOPE'
   });
   stub('_lib/supabase.js',{
     one:async(table,query)=>{if(table==='profiles')return {buffer_organization_id:''};if(table==='content_items'){const id=decodeURIComponent(query.match(/buffer_post_id=eq\.([^&]+)/)[1]);return Object.assign({current_fingerprint:fp(id)},items[id]);}return null;},
-    select:async(table,query)=>{if(table==='comments'&&/buffer_note_id=not.is.null/.test(query))return saved;if(table==='comments'&&/author_type=eq.client/.test(query))return pendingRows||[];if(table==='clients')return [{id:'client_1',company:'Coffee Chaz'}];return [];},
+    select:async(table,query)=>{if(table==='comments'&&/kind=eq.change&buffer_note_id=not.is.null/.test(query))return [{id:'cm_old',buffer_note_id:'note_change_1'},{id:'cm_done',buffer_note_id:'deleted:note_x'}];if(table==='comments'&&/buffer_note_id=not.is.null/.test(query))return saved;if(table==='comments'&&/author_type=eq.client/.test(query))return pendingRows||[];if(table==='clients')return [{id:'client_1',company:'Coffee Chaz'}];return [];},
     insert:async(table,body)=>{calls.insert.push({table,body});return Array.isArray(body)?body:[Object.assign({id:'new_'+table},body)];},
     update:async(table,query,body)=>{calls.update.push({table,query,body});return [body];},
     remove:async(table,query)=>{calls.remove.push({table,query});},
@@ -136,17 +141,26 @@ async function syncTests(){
 }
 
 async function pushPendingTests(){
-  // Client comments the room couldn't send are added to Buffer from the creator side.
-  let calls=syncHarness(()=>[],[{id:'cm_1',content_item_id:'item_1',author_name:'coffee',body:'cheese',kind:'comment'},{id:'cm_2',content_item_id:'item_1',author_name:'coffee',body:'Hours are wrong',kind:'change'}]);
+  // Change requests the room couldn't send go to Buffer from the creator side; plain comments never do.
+  let calls=syncHarness(()=>[],[{id:'cm_2',content_item_id:'item_1',author_name:'coffee',body:'Hours are wrong',kind:'change'}]);
   let out=await runSync();
-  assert.equal(out.notesPushed,2);
-  assert.deepEqual(calls.created.map(c=>c.text),['coffee (Coffee Chaz) commented in Receipts: cheese','coffee (Coffee Chaz) requested changes in Receipts: Hours are wrong']);
+  assert.equal(out.notesPushed,1);
+  assert.equal(calls.created.length,1);
+  assert.match(calls.created[0].text,/^Changes requested by coffee \(Coffee Chaz\): "Hours are wrong"\nFull review thread: https:\/\/receipts\.test\/app\?post=item_1$/);
   assert.equal(calls.created[0].token,'key_with_notes','uses the creator\'s own Buffer access');
   assert.equal(calls.created[0].postId,'buf_assigned');
-  assert.deepEqual(calls.update.filter(u=>u.table==='comments'&&u.body.buffer_note_id).map(u=>u.body.buffer_note_id),['pushed_1','pushed_2']);
+
+  // Approved post: change-request notes are deleted from Buffer, then one approval note is added.
+  calls=syncHarness(()=>[],[{id:'cm_2',content_item_id:'item_1',author_name:'coffee',body:'Hours are wrong',kind:'change'},{id:'cm_3',content_item_id:'item_1',author_name:'coffee',body:'Final approval stamped with the owner code.',kind:'approval'}],null,{status:'approved',receipt_code:'RCP-ABC1234'});
+  out=await runSync();
+  assert.deepEqual(calls.deleted,['note_change_1'],'only live change notes are deleted');
+  assert.equal(calls.created.length,1,'no change note is sent for an approved post');
+  assert.match(calls.created[0].text,/^Approved by coffee \(Coffee Chaz\) · Receipt RCP-ABC1234 · Snapshot v1\nReview thread: /);
+  const marks=calls.update.filter(u=>u.table==='comments').map(u=>u.body.buffer_note_id);
+  assert.ok(marks.includes('deleted:note_change_1'),'deleted notes are marked so they are never resent');
 
   // A Buffer refusal is reported, not swallowed.
-  calls=syncHarness(()=>[],[{id:'cm_1',content_item_id:'item_1',author_name:'coffee',body:'cheese',kind:'comment'}],()=>{throw new Error('Thread is closed');});
+  calls=syncHarness(()=>[],[{id:'cm_2',content_item_id:'item_1',author_name:'coffee',body:'x',kind:'change'}],()=>{throw new Error('Thread is closed');});
   out=await runSync();
   assert.equal(out.notesPushError,'Thread is closed');
 }
@@ -154,7 +168,7 @@ async function pushPendingTests(){
 async function writeBackTests(){
   const created=[],updates=[];
   stub('_lib/buffer-oauth.js',{accessToken:async()=>'oauth_token'});
-  stub('_lib/buffer.js',{createPostNote:async(token,postId,text)=>{created.push({token,postId,text});return {id:'buffer_note_1'};}});
+  stub('_lib/buffer.js',{createPostNote:async(token,postId,text)=>{created.push({token,postId,text});return {id:'buffer_note_1'};},deletePostNote:async()=>true});
   stub('_lib/email.js',{sendEmail:async()=>({sent:false}),uniqueRecipients:x=>x});
   stub('_lib/supabase.js',{
     one:async table=>{
@@ -167,19 +181,25 @@ async function writeBackTests(){
     update:async(table,query,body)=>{updates.push({table,query,body});return [body];},
     remove:async()=>null,rest:async()=>null
   });
-  const review=fresh('review-api.js');
-  const res=await review.handler({httpMethod:'POST',headers:{},body:JSON.stringify({action:'addComment',token:'room',payload:{postId:'item_1',name:'James',body:'This is chicken'}})});
+  const event=body=>({httpMethod:'POST',headers:{},body:JSON.stringify(body)});
+  // A plain comment stays in Receipts.
+  let review=fresh('review-api.js');
+  let res=await review.handler(event({action:'addComment',token:'room',payload:{postId:'item_1',name:'James',body:'Love it'}}));
+  assert.equal(res.statusCode,200,res.body);
+  assert.equal(created.length,0,'plain comments are not copied to Buffer');
+  // A change request becomes one Buffer note with a link to the thread.
+  res=await review.handler(event({action:'requestChanges',token:'room',payload:{postId:'item_1',name:'James',body:'This is chicken'}}));
   assert.equal(res.statusCode,200,res.body);
   assert.equal(JSON.parse(res.body).mirrored,true);
-  assert.deepEqual(created[0],{token:'oauth_token',postId:'post_abc',text:'James (Coffee Chaz) commented in Receipts: This is chicken'});
-  assert.deepEqual(updates.find(u=>u.table==='comments').body,{buffer_note_id:'buffer_note_1'},'the Buffer note id is saved so sync skips it');
+  assert.deepEqual(created[0],{token:'oauth_token',postId:'post_abc',text:'Changes requested by James (Coffee Chaz): "This is chicken"\nFull review thread: https://receipts.test/app?post=item_1'});
+  assert.deepEqual(updates.find(u=>u.table==='comments').body,{buffer_note_id:'buffer_note_1'});
 
-  // Buffer failing never blocks the client's comment.
+  // Buffer failing never blocks the client's change request.
   stub('_lib/buffer.js',{createPostNote:async()=>{throw new Error('Buffer down');}});
-  const review2=fresh('review-api.js');
-  const res2=await review2.handler({httpMethod:'POST',headers:{},body:JSON.stringify({action:'addComment',token:'room',payload:{postId:'item_1',name:'James',body:'Still saved'}})});
-  assert.equal(res2.statusCode,200,res2.body);
-  assert.equal(JSON.parse(res2.body).mirrored,false);
+  review=fresh('review-api.js');
+  res=await review.handler(event({action:'requestChanges',token:'room',payload:{postId:'item_1',name:'James',body:'Still saved'}}));
+  assert.equal(res.statusCode,200,res.body);
+  assert.equal(JSON.parse(res.body).mirrored,false);
 }
 
 async function roomVisibilityTests(){

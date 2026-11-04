@@ -16,7 +16,16 @@
       document.getElementById('nudge-root').innerHTML=UI.approvalNudge();
     }
   }
-  async function loadCreator(){app.innerHTML=UI.loading('Loading your approval board…');try{state.data=await API.bootstrap();render();afterCreatorLoad();setTimeout(afterCreatorReady,0);}catch(e){app.innerHTML=UI.error(e.message);}}
+  // A "Full review thread" link in a Buffer note opens /app?post=<id> straight to that post.
+  var linkedPostId=(function(){try{return new URLSearchParams(window.location.search).get('post');}catch(e){return null;}})();
+  function openLinkedPost(){
+    if(!linkedPostId||!state.data)return;
+    var id=linkedPostId;linkedPostId=null;
+    try{var url=new URL(window.location.href);url.searchParams.delete('post');window.history.replaceState(null,'',url.pathname+url.search+url.hash);}catch(e){}
+    if((state.data.posts||[]).some(function(p){return p.id===id;}))window.ReceiptsActions.openPost(id);
+    else U.toast('That post isn\'t in your Receipts board.');
+  }
+  async function loadCreator(){app.innerHTML=UI.loading('Loading your approval board…');try{state.data=await API.bootstrap();render();afterCreatorLoad();openLinkedPost();setTimeout(afterCreatorReady,0);}catch(e){app.innerHTML=UI.error(e.message);}}
   async function loadRoom(){app.innerHTML=UI.loading('Opening approval room…');try{state.room=await API.getReviewRoom(state.reviewToken);if(state.expandedReviewPostId===undefined){var firstWaiting=(state.room.posts||[]).find(function(p){return p.status==='review';});state.expandedReviewPostId=firstWaiting?firstWaiting.id:null;}render();}catch(e){app.innerHTML=UI.error(e.message);}}
   async function refresh(){if(state.reviewToken)return loadRoom();return loadCreator();}
   async function boot(){app.innerHTML=UI.loading();state.reviewToken=getReviewToken();try{if(state.reviewToken){await API.init();return loadRoom();}var auth=await Auth.init();state.session=auth.session;if(auth.mode==='remote'&&!auth.session){render();return;}if(isBufferCallback())return finishBufferConnect();await loadCreator();}catch(e){app.innerHTML=API.getConfig().frictionlessBeta?UI.betaError(e.message):UI.error(e.message);}}
@@ -47,8 +56,8 @@
     if(out.notesNeedMigration)U.toast('Buffer notes need Supabase migration 003 before they can sync.');
     if(out.notesNeedScope)U.toast(bufferConnected()?'Reconnect Buffer in Settings to allow Notes.':'Your Buffer key needs Notes access (notes:read and notes:write). Make a new key with Notes enabled.');
     if(out.notesError){var msg='Buffer Notes could not be read: '+out.notesError;if(!quiet||msg!==lastNoteError)U.toast(msg);lastNoteError=msg;}
-    if(out.notesPushError){var pmsg='Could not add client comments to Buffer: '+out.notesPushError;if(!quiet||pmsg!==lastNoteError)U.toast(pmsg);lastNoteError=pmsg;}
-    if(out.notesPushed)U.toast(out.notesPushed+' client comment'+(out.notesPushed===1?'':'s')+' added to Buffer');
+    if(out.notesPushError){var pmsg='Could not update Buffer notes: '+out.notesPushError;if(!quiet||pmsg!==lastNoteError)U.toast(pmsg);lastNoteError=pmsg;}
+    if(out.notesPushed)U.toast('Buffer notes updated for '+out.notesPushed+' client '+(out.notesPushed===1?'response':'responses'));
     if(out.notesNoToken&&!quiet)U.toast('Receipts can\'t reach Buffer in this tab. Paste your Buffer key (with Notes access) or connect Buffer in Settings.');
   }
   // quiet: background sync on load, on a timer, and when the tab regains focus.

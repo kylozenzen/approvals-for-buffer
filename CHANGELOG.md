@@ -3,7 +3,7 @@
 ## 1.4.0 — Buffer Notes, both directions
 
 - Moved notes sync to Buffer's new Notes API (`collaborationNotes`). The old `Post.notes` field never sees notes from Buffer's Notes panel.
-- Client comments, change requests and approvals are now added to the Buffer post as Notes ("James (Coffee Chaz) commented in Receipts: …"), and tagged "Copied to Buffer" in the creator's thread.
+- Change requests become Buffer Notes with a link to the full Receipts thread; on approval the change-request Notes are deleted and one approval Note is added. Plain comments stay in Receipts.
 - Notes are read only for posts already in a client room, four at a time, to stay inside Buffer's rate limits.
 - Notes Receipts wrote are never pulled back in as duplicates; client comments are never deleted by sync.
 - Default OAuth scopes now include `notes:read notes:write`.
