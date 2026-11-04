@@ -86,9 +86,9 @@ async function resolveBufferToken(user,event){
   if(oauthToken)return {token:oauthToken,source:'oauth'};
   return {token:(process.env.BUFFER_API_KEY||process.env.BUFFER_TOKEN||'').trim(),source:'server_key'};
 }
-async function pullBufferPosts(user,event,orgId){
+async function pullBufferPosts(user,event,orgId,after){
   const resolved=await resolveBufferToken(user,event);
-  try{return {pulled:await BufferAPI.getPosts(resolved.token,orgId),token:resolved.token,source:resolved.source};}
+  try{return {pulled:await BufferAPI.getPosts(resolved.token,orgId,after),token:resolved.token,source:resolved.source};}
   catch(e){
     // An OAuth access token can be revoked or expire early: refresh once and retry.
     if(resolved.source!=='oauth'||e.bufferStatus!==401)throw e;
@@ -191,7 +191,16 @@ async function syncNotes(user,token,targets,base){
 }
 async function syncBuffer(user,event){
   const profile=await db.one('profiles','select=buffer_organization_id&id=eq.'+q(user.id));
-  const {pulled,token}=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id);
+  const pulledPages=[];let cursor=null,token='',firstPage=null;
+  // Paginate existing tracked posts too, without ever importing candidates.
+  for(let page=0;page<20;page++){
+    const result=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id,cursor);
+    token=result.token;if(!firstPage)firstPage=result.pulled;
+    pulledPages.push(...result.pulled.posts);
+    if(!result.pulled.hasNextPage||!result.pulled.nextCursor)break;
+    cursor=result.pulled.nextCursor;
+  }
+  const pulled=Object.assign({},firstPage,{posts:pulledPages,truncated:Boolean(cursor&&firstPage)});
   let added=0,updated=0,changed=0;const noteTargets=[];
   for(const post of pulled.posts){
     const snap=snapshotFromBuffer(post),fp=C.fingerprint(snap);
@@ -216,7 +225,7 @@ async function syncBuffer(user,event){
 
 async function bufferCandidates(user,event,p){
   const profile=await db.one('profiles','select=buffer_organization_id&id=eq.'+q(user.id));
-  const {pulled}=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id);
+  const {pulled}=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id,p.after);
   // Entire response is transient; no content_items or snapshots writes.
   const drafts=pulled.posts.filter(x=>x.bufferStatus==='draft'&&!x.dueAt);
   return {posts:drafts,after:pulled.nextCursor||null,hasNextPage:Boolean(pulled.hasNextPage),organization:pulled.organization};
@@ -227,7 +236,7 @@ async function importSelected(user,event,p){
   if(!p.bufferId)throw Object.assign(new Error('Choose a Buffer draft.'),{statusCode:400});
   const profile=await db.one('profiles','select=buffer_organization_id&id=eq.'+q(user.id));
   // Re-read the selected candidate from Buffer rather than trusting browser-supplied post data.
-  const {pulled}=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id);
+  const {pulled}=await pullBufferPosts(user,event,profile&&profile.buffer_organization_id,p.after);
   const post=pulled.posts.find(x=>x.bufferId===p.bufferId);
   if(!post||post.bufferStatus!=='draft'||post.dueAt)throw Object.assign(new Error('This unscheduled Buffer draft is no longer available. Refresh the picker.'),{statusCode:409});
   const snap=snapshotFromBuffer(post),fp=C.fingerprint(snap);
