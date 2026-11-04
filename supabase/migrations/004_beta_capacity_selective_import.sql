@@ -25,6 +25,8 @@ declare owner_id uuid; is_active boolean;
 begin
   -- Ownership is checked on every assignment, including archived content.
   if new.client_id is not null then
+    -- Lock before checking active/ownership: room archive must not race an import.
+    perform pg_advisory_xact_lock(hashtextextended(new.client_id::text, 105));
     select user_id,active into owner_id,is_active from public.clients where id=new.client_id;
     if owner_id is distinct from new.user_id then
       raise exception 'Client room does not belong to this creator.' using errcode='23503';
@@ -32,7 +34,6 @@ begin
     if not new.archived and not is_active then
       raise exception 'Archived client rooms cannot receive posts.' using errcode='23514';
     end if;
-    perform pg_advisory_xact_lock(hashtextextended(new.client_id::text, 105));
     if not new.archived and (tg_op='INSERT' or old.archived or new.client_id is distinct from old.client_id) then
       if (select count(*) from public.content_items where client_id=new.client_id and not archived and id<>new.id)>=1 then
         raise exception 'This room already has an active post. Open or archive it before importing another.' using errcode='23514';
@@ -76,3 +77,6 @@ create or replace view public.receipts_beta_overages as
 select c.user_id,count(distinct c.id) filter(where c.active) as active_rooms,
        count(distinct c.id) filter(where c.active)>3 as too_many_rooms
 from public.clients c group by c.user_id;
+
+revoke all on public.receipts_beta_overages from public, anon, authenticated;
+grant select on public.receipts_beta_overages to service_role;
